@@ -61,8 +61,7 @@ venv.bak/
 # Output files
 *.txt
 *.log
-workflow_report.txt
-ideal_durations.csv
+!requirements.txt
 
 # OS generated files
 .DS_Store
