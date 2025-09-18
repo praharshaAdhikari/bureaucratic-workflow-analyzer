@@ -196,7 +196,7 @@ class Workflow:
             for case in self.cases:
                 # Color case info based on status
                 case_text = f"Case ID: {case.id}, Status: {case.status}"
-                if case.status == 'Completed':
+                if case.status == 'Accepted':
                     write_both(case_text, f"{Fore.GREEN}{case_text}{Style.RESET_ALL}")
                 elif case.status == 'Rejected':
                     write_both(case_text, f"{Fore.RED}{case_text}{Style.RESET_ALL}")
@@ -207,7 +207,7 @@ class Workflow:
                     # Color task info based on status
                     task_text = f"  Task: {task.name}, Duration: {task.duration} mins, Status: {task.status}"
                     if task.status == 'Completed':
-                        write_both(task_text, f"  {Fore.GREEN}Task: {task.name}, Duration: {task.duration} mins, Status: {task.status}{Style.RESET_ALL}")
+                        write_both(task_text, f"  Task: {task.name}, Duration: {task.duration} mins, Status: {task.status}{Style.RESET_ALL}")
                     elif task.status == 'Rejected':
                         write_both(task_text, f"  {Fore.RED}Task: {task.name}, Duration: {task.duration} mins, Status: {task.status}{Style.RESET_ALL}")
                     else:
@@ -222,10 +222,10 @@ class Workflow:
                         if len(ideal_duration) > 0:
                             ratio = task.duration / ideal_duration[0]
                             if ratio > 1.5:
-                                warning_text = f"    WARNING: Task {task.name} completed in more than 150% of the ideal duration."
+                                warning_text = f"    WARNING: Task {task.name} took {ratio * 100:.1f}% of the ideal duration."
                                 write_both(warning_text, f"    {Fore.YELLOW}{warning_text}{Style.RESET_ALL}")
                             elif ratio < 0.5:
-                                praise_text = f"    CONGRATS: Task {task.name} completed in less than 50% of the ideal duration."
+                                praise_text = f"    CONGRATS: Task {task.name} took {ratio * 100:.1f}% of the ideal duration."
                                 write_both(praise_text, f"    {Fore.GREEN}{praise_text}{Style.RESET_ALL}")
                 
                 write_both("")  # Empty line between cases
