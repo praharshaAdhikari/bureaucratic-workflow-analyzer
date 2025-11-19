@@ -7,14 +7,15 @@ and generating reports.
 """
 
 import simpy
-from workflow import Workflow
+
+from digital_twin.workflow import Workflow
 
 
 def main():
     """Main execution function."""
     # Create simulation environment
     env = simpy.Environment()
-    
+
     # Create workflow instance
     workflow = Workflow("Main Process", env)
 
@@ -24,18 +25,16 @@ def main():
         # Setup ideal durations and workers
         workflow.read_ideal_durations()
         workflow.define_workers()
-        
+
         # Start simulation
         workflow.start(speed=100)
-        
+
         # Run the simulation
         env.run()
-        
+
         # Generate final report
         workflow.generate_report()
 
 
 if __name__ == "__main__":
     main()
-
-    

@@ -9,8 +9,8 @@ from typing import Generator, List
 
 import simpy
 
-from task import Task
-from worker import Worker
+from digital_twin.task import Task
+from digital_twin.worker import Worker
 
 
 class Case:

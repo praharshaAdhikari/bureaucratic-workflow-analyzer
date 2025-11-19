@@ -9,7 +9,7 @@ from typing import Generator
 
 import simpy
 
-from task import Task
+from digital_twin.task import Task
 
 
 class Worker:
