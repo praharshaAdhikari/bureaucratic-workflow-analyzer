@@ -23,6 +23,8 @@ class Case:
         tasks (List[Task]): List of tasks in this case
         workers (List[Worker]): List of workers assigned to tasks
         status (str): Current status of the case ('Pending', 'Accepted', 'Rejected')
+        priority (int): The priority of the case. Lower number means higher priority.
+        creation_time (float): The time when the case was created.
     """
 
     def __init__(self, id: int, env: simpy.Environment) -> None:
@@ -38,6 +40,8 @@ class Case:
         self.tasks: List[Task] = []
         self.workers: List[Worker] = []
         self.status = "Pending"
+        self.priority = 0
+        self.creation_time = env.now
 
     def start_work(self) -> None:
         """Start processing work for this case."""

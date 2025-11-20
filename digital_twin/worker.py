@@ -32,9 +32,9 @@ class Worker:
         """
         self.name = name
         self.env = env
-        self.resource = simpy.Resource(
+        self.resource = simpy.PriorityResource(
             env, capacity=1
-        )  # Modelling exclusivity. capacity 1 means 1 task at a time
+        )  # Modelling Exclusivity with Priority
 
     def perform_task(
         self,
@@ -58,7 +58,7 @@ class Worker:
         print(
             f"Worker {self.name} requesting to perform task: {task.name} at time {self.env.now}"
         )
-        with self.resource.request() as req:
+        with self.resource.request(priority=-task.case.priority) as req:
             yield req  # Modelling semaphore like behaviour.
             print(
                 f"Worker {self.name} started task: {task.name} at time {self.env.now}"

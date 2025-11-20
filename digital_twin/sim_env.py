@@ -98,41 +98,30 @@ class SimEnv:
     def _create_case(self, case_id):
         """Creates a new case with tasks using the Workflow."""
         print(f"Creating new case {case_id} at time {self.env.now:.2f}")
-
         task_sequence = {
-            "ReceiveApplication": ["Review"],
-            "Review": ["Approval"],
-            "Approval": [],
-            "Finalize": [],
-            "PaymentProcessing": [],
+            'ReceiveApplication': ['Review'],
+            'Review': ['Approval'],
+            'Approval': [],
+            'Finalize': [],
+            'PaymentProcessing': []
         }
-        current_task = "ReceiveApplication"
+        current_task = 'ReceiveApplication'
         while current_task:
             task_name = current_task
-            # 1. Sample Duration
-            # 2. Assign a Worker (using round robin cuz it good)
-            # # 3. Run task
             duration = self.workflow.digital_twin.sample_duration(task_name)
-            task = Task(task_name, duration)
-
-            worker_name = self.params.get("workers", [])[
-                (case_id - 1) % len(self.params.get("workers", []))
+            task = Task(task_name, duration, case=case_)
+            worker_name = self.params.get('workers', [])[
+                (case_id - 1) % len(self.params.get('workers', []))
             ]
             worker = self.workers.get(worker_name)
             if not worker:
-                print(
-                    f"Warning: No worker found named {worker_name} for task {task_name}"
-                )
+                print(f"Warning: No worker found named {worker_name} for task {task_name}")
                 break
 
-            print(
-                f"Case {case_id}: starting task '{task_name}' for {duration:.2f} minutes"
-            )
+            print(f"Case {case_id}: starting task '{task_name}' for {duration:.2f} minutes")
             yield self.env.process(self._perform_task(worker, task))
-            if task.status != "Completed":
-                print(
-                    f"Case {case_id}: Task {task.name} was not completed, breaking case workflow"
-                )
+            if task.status != 'Completed':
+                print(f"Case {case_id}: Task {task.name} was not completed, breaking case workflow")
                 break
 
             next_tasks = task_sequence.get(task_name, [])
@@ -140,6 +129,7 @@ class SimEnv:
                 print(f"Case {case_id} completed at time {self.env.now:.2f}")
                 break
             current_task = next_tasks[0]
+
 
     def _perform_task(self, worker: Worker, task: Task):
         """Worker performs a task (uses the worker's resource)."""
@@ -232,12 +222,12 @@ class SimEnv:
                             worker_utilization[worker_name] = 1  # worker is busy
 
         # Calculate case age
-        # for case in self.workflow.cases:
-        #     case_age = self.env.now - case.creation_time # Assuming you have a creation time
-        #     self.observation_space['case_age'] = case_age
+        case_age = 0
+        for case in self.workflow.cases:
+            case_age = self.env.now - case.creation_time
 
         # Calculate task completion time.
-        task_completion_time = {}  # key will be task name.
+        task_completion_time = {}
         for case in self.workflow.cases:
             for task in case.tasks:
                 if task.status == "Completed":
@@ -251,6 +241,7 @@ class SimEnv:
 
         self.observation_space["queue_lengths"] = list(queue_lengths.values())
         self.observation_space["worker_utilization"] = worker_utilization
+        self.observation_space["case_age"] = case_age
         self.observation_space["task_completion_time"] = task_completion_time
         self.observation_space["rejected_tasks_count"] = rejected_tasks_count
 
@@ -271,14 +262,13 @@ class SimEnv:
 
     def _reassign_task(self):
         """Reassigns a task from a queue to a different worker."""
-        print("Reassigning a task (placeholder)")
-        # Find the longest waiting task in any queue
+        print("Reassigning a task")
         longest_waiting_task = None
         longest_wait_time = -1
         for case in self.workflow.cases:
             for task in case.tasks:
                 if task.status == "Pending":
-                    wait_time = self.env.now
+                    wait_time = self.env.now - task.start_time if hasattr(task, 'start_time') else 0
                     if wait_time > longest_wait_time:
                         longest_wait_time = wait_time
                         longest_waiting_task = (case, task)
@@ -287,27 +277,16 @@ class SimEnv:
             case, task = longest_waiting_task
             print(f"Reassigning task '{task.name}' from Case {case.id}")
 
-            available_workers = [
-                worker
-                for worker_name, worker in self.workers.items()
-                if worker_name
-                not in [
-                    t.worker
-                    for case in self.workflow.cases
-                    for t in case.tasks
-                    if t.status == "Pending"
-                ]
-            ]
+            # Barebones Implementation
+            available_workers = [worker for worker_name, worker in self.workers.items() if worker_name not in [t.worker for case in self.workflow.cases for t in case.tasks if t.status == "Pending"]]
             if available_workers:
-                new_worker = available_workers[
-                    0
-                ]
+                new_worker = available_workers[0]
                 print(f"Reassigning task '{task.name}' to worker {new_worker.name}")
-                # TODO: Implement the reassignment
-                # To reassign a task, you will need to
-                # 1. Remove the task from the current worker.
-                # 2. Assign the task to the new worker.
 
+                if task in case.tasks:
+                    case.tasks.remove(task)
+                    task.worker = new_worker.name
+                    case.tasks.append(task)
             else:
                 print("No workers available to reassign the task.")
         else:
@@ -315,11 +294,16 @@ class SimEnv:
 
     def _increase_case_priority(self):
         """Increases the priority of a case (placeholder)."""
-        print("Increasing case priority (placeholder)")
+        print("Increasing case priority")
         # Implement case prioritization
-        # Find the case
-        # Increase its priority. Remaining to implement simpy.PriorityResource
-        pass
+
+        case_id_to_increase = self.workflow.cases[0].id
+
+        for case in self.workflow.cases:
+            if case.id == case_id_to_increase:
+                case.priority -= 1
+                print(f"Increased priority of case {case.id} to {case.priority}")
+                break
 
     def _add_temporary_worker(self):
         """Adds a temporary worker (placeholder)."""
