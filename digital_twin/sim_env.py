@@ -4,19 +4,20 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import simpy
-from case import Case
-from digital_twin_lite import DigitalTwinLite
 from scipy import stats
-from task import Task
-from worker import Worker
-from workflow import Workflow
+
+from digital_twin.case import Case
+from digital_twin.digital_twin_lite import DigitalTwinLite
+from digital_twin.task import Task
+from digital_twin.worker import Worker
+from digital_twin.workflow import Workflow
 
 
 class SimEnv:
     def __init__(
         self,
         twin_params: Dict[str, Any],
-        logs_path: str = "data_collection/data/logs.csv",
+        logs_path: str = "data_collection/logs.csv",
         decision_interval: float = 5.0,
     ) -> None:
         """Initializes the SimEnv with twin parameters, logs path, and decision interval."""
@@ -37,10 +38,10 @@ class SimEnv:
 
     def reset(self) -> Dict[str, Any]:
         """Resets the simulation environment to begin a new episode."""
-        self.env = simpy.Environment()
+        # self.env = simpy.Environment()
         self.workflow = Workflow("Workflow", self.env)
-        self._setup_workers()
         self._load_digital_twin()
+        self._setup_workers()
         self._start_arrival_process()
 
         self.state = self._get_observation()
@@ -98,27 +99,33 @@ class SimEnv:
     def _create_case(self, case_id):
         """Creates a new case with tasks using the Workflow."""
         print(f"Creating new case {case_id} at time {self.env.now:.2f}")
-        case_tasks = self.workflow.logs[self.workflow.logs['CaseID'] == case_id]
+        case_tasks = self.workflow.logs[self.workflow.logs["CaseID"] == case_id]
         if case_tasks.empty:
             print(f"Warning: No tasks found for case {case_id} in logs.")
             return
 
-        case_tasks = case_tasks.sort_values(by='StartTime')
+        case_tasks = case_tasks.sort_values(by="StartTime")
 
         for _, task_row in case_tasks.iterrows():
-            task_name = task_row['Task']
+            task_name = task_row["Task"]
             duration = self.workflow.digital_twin.sample_duration(task_name)
             task = Task(task_name, duration, case=case_)
-            worker_name = task_row['Worker']
-            worker  = self.workers.get(worker_name)
+            worker_name = task_row["Worker"]
+            worker = self.workers.get(worker_name)
             if not worker:
-                print(f"Warning: No worker found named {worker_name} for task {task_name}")
+                print(
+                    f"Warning: No worker found named {worker_name} for task {task_name}"
+                )
                 continue
 
-            print(f"Case {case_id}: starting task '{task_name}' for {duration:.2f} minutes")
+            print(
+                f"Case {case_id}: starting task '{task_name}' for {duration:.2f} minutes"
+            )
             yield self.env.process(self._perform_task(worker, task))
-            if task.status != 'Completed':
-                print(f"Case {case_id}: Task {task.name} was not completed, breaking case workflow")
+            if task.status != "Completed":
+                print(
+                    f"Case {case_id}: Task {task.name} was not completed, breaking case workflow"
+                )
                 break
         print(f"Case {case_id} completed at time {self.env.now:.2f}")
 
@@ -147,17 +154,14 @@ class SimEnv:
             loc: float
             scale: float
             shape, loc, scale = dist_params
-            return max(
-                1.0, stats.lognorm.rvs(shape, loc=loc, scale=scale)
-            )
+            return max(1.0, stats.lognorm.rvs(shape, loc=loc, scale=scale))
         elif dist_type == "empirical":
             return max(1.0, np.random.choice(dist_params))
         else:
             return 10.0  # Default
 
     def _define_spaces(self) -> None:
-
-       self.observation_space = {
+        self.observation_space = {
             "queue_lengths": [
                 "ReceiveApplication",
                 "Review",
@@ -230,7 +234,7 @@ class SimEnv:
 
         self.observation_space["queue_lengths"] = list(queue_lengths.values())
         self.observation_space["worker_utilization"] = worker_utilization
-        self.observation_space['case_age'] = case_age
+        self.observation_space["case_age"] = case_age
         self.observation_space["task_completion_time"] = task_completion_time
         self.observation_space["rejected_tasks_count"] = rejected_tasks_count
 
@@ -256,31 +260,35 @@ class SimEnv:
         for case in self.workflow.cases:
             for task in case.tasks:
                 if task.status == "Pending":
-                    wait_time: float = self.env.now - task.start_time if hasattr(task, 'start_time') else 0
+                    wait_time: float = (
+                        self.env.now - task.start_time
+                        if hasattr(task, "start_time")
+                        else 0
+                    )
                     if wait_time > longest_wait_time:
                         longest_wait_time = wait_time
                         longest_waiting_task = (case, task)
 
         if longest_waiting_task:
-            case : Case
-            task : Task
+            case: Case
+            task: Task
             case, task = longest_waiting_task
             print(f"Reassigning task '{task.name}' from Case {case.id}")
 
             # Barebones Implementation
             available_workers: List[Worker] = [
-                           worker
-                           for worker_name, worker in self.workers.items()
-                           if worker_name
-                           not in [
-                               t.worker
-                               for case in self.workflow.cases
-                               for t in case.tasks
-                               if t.status == "Pending"
-                           ]
-                       ]
+                worker
+                for worker_name, worker in self.workers.items()
+                if worker_name
+                not in [
+                    t.worker
+                    for case in self.workflow.cases
+                    for t in case.tasks
+                    if t.status == "Pending"
+                ]
+            ]
             if available_workers:
-                new_worker : Worker  = available_workers[0]
+                new_worker: Worker = available_workers[0]
                 print(f"Reassigning task '{task.name}' to worker {new_worker.name}")
 
                 if task in case.tasks:
@@ -310,7 +318,7 @@ class SimEnv:
         print("Adding a temporary worker")
 
         temp_worker_name = f"TempWorker_{len(self.workers) + 1}"
-        temp_worker : Worker = Worker(temp_worker_name, self.env)
+        temp_worker: Worker = Worker(temp_worker_name, self.env)
         self.workers[temp_worker_name] = temp_worker
         print(f"Added temporary worker: {temp_worker_name}")
 
@@ -332,9 +340,7 @@ class SimEnv:
         reward: float = -total_wait_time * 0.1
 
         # Penalty for rejected cases
-        rejected_count = self.observation_space[
-            "rejected_tasks_count"
-        ]
+        rejected_count = self.observation_space["rejected_tasks_count"]
         reward -= rejected_count * 100.0
 
         # Reward for completed cases

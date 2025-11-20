@@ -19,6 +19,33 @@ class DigitalTwinLite:
     def load_logs(self, filename="logs.csv"):
         try:
             self.logs = pd.read_csv(filename)
+            # Validating present columns
+            required_columns = ["CaseID", "Task", "Worker", "StartTime", "EndTime"]
+            if not all(col in self.logs.columns for col in required_columns):
+                missing_cols = [
+                    col for col in required_columns if col not in self.logs.columns
+                ]
+                print(f"Error: Missing required columns in log file: {missing_cols}")
+                self.logs = None
+                return False
+
+            try:
+                self.logs["StartTime"] = pd.to_datetime(self.logs["StartTime"])
+                self.logs["EndTime"] = pd.to_datetime(self.logs["EndTime"])
+            except Exception as e:
+                print(f"Error converting StartTime/EndTime to datetime: {e}")
+                self.logs = None
+                return False
+
+            try:
+                self.logs["Duration"] = (
+                    self.logs["EndTime"] - self.logs["StartTime"]
+                ).dt.total_seconds() / 60.0
+            except Exception as e:
+                print(f"Error calculating duration: {e}")
+                self.logs = None
+                return False
+
         except FileNotFoundError:
             print(f"Error: Log file not found at {filename}")
             self.logs = None
@@ -42,7 +69,7 @@ class DigitalTwinLite:
                     durations.tolist(),
                 )
                 continue
-            # Fit a lognormal distribution (common for durations), otherwise empirical value
+            # Fit a lognormal distribution (common for durations)
             try:
                 shape, loc, scale = stats.lognorm.fit(durations, floc=0)
                 self.task_duration_distributions[task] = (

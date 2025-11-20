@@ -53,7 +53,9 @@ class Workflow:
         self.workers: Optional[List[Worker]] = None
         self.digital_twin = DigitalTwinLite()
 
-    def read_logs(self, filename: str = "logs.csv") -> pd.DataFrame | None:
+    def read_logs(
+        self, filename: str = "data_collection/logs.csv"
+    ) -> pd.DataFrame | None:
         """
         Read workflow logs from a CSV file.
 

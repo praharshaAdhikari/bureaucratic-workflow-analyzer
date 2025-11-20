@@ -5,8 +5,6 @@ This module contains the Task class that represents individual tasks
 in a workflow with their properties and status.
 """
 
-from digital_twin.case import Case
-
 
 class Task:
     """
@@ -18,7 +16,7 @@ class Task:
         status (str): Current status of the task ('Pending', 'Completed', 'Rejected')
     """
 
-    def __init__(self, name: str, duration: float, case: Case = None) -> None:
+    def __init__(self, name: str, duration: float, case=None) -> None:
         """
         Initialize a new Task.
 

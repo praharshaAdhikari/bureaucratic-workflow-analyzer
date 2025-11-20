@@ -6,9 +6,11 @@ components: reading logs, setting up workers, running the simulation,
 and generating reports.
 """
 
+import os
+
 import simpy
 
-from digital_twin.workflow import Workflow
+from digital_twin.sim_env import SimEnv
 
 
 def main():
@@ -16,24 +18,19 @@ def main():
     # Create simulation environment
     env = simpy.Environment()
 
-    # Create workflow instance
-    workflow = Workflow("Main Process", env)
+    # Define worker resources (example)
+    workers = []  # Replace with actual worker names
+    twin_params = {"workers": workers}
 
-    # Load and process logs
-    logs_df = workflow.read_logs()
-    if logs_df is not None:
-        # Setup ideal durations and workers
-        workflow.read_ideal_durations()
-        workflow.define_workers()
+    # Create SimEnv instance, passing in the env
+    sim_env = SimEnv(twin_params=twin_params)
+    sim_env.env = env
+    sim_env.reset()
 
-        # Start simulation
-        workflow.start(speed=100)
-
-        # Run the simulation
-        env.run()
-
-        # Generate final report
-        workflow.generate_report()
+    # Run the simulation
+    env.run(until=24 * 60)
+    # Generate final report
+    # workflow.generate_report() # there is no workflow, so comment this out.
 
 
 if __name__ == "__main__":
