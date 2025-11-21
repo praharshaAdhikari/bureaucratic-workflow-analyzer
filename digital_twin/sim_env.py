@@ -39,13 +39,17 @@ class SimEnv(gym.Env):
         self._setup_workers()
         self._define_spaces()
 
-    def reset(self) -> Dict[str, Any]:
+    def reset(
+        self, seed: Optional[int] = None, options: Optional[Dict] = None
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        super().reset(seed=seed)
+        self.env = simpy.Environment()
         self.workflow = Workflow("Workflow", self.env)
         self._load_digital_twin()
         self._setup_workers()
         self._start_arrival_process()
         self.state = self._get_observation()
-        return self.state
+        return self.state, {}
 
     def step(
         self, action: int
@@ -155,20 +159,29 @@ class SimEnv(gym.Env):
             return 10.0
 
     def _define_spaces(self) -> None:
+        num_tasks = len(self.workflow.digital_twin.task_duration_distributions)
+        
+        # Define a maximum number of workers to allow for dynamic addition
+        # Base workers + max temp workers (e.g., 5)
+        self.max_workers = 15
+        
+        if num_tasks == 0:
+            num_tasks = 1 # Fallback
+
+        print(f"Defining spaces with num_tasks={num_tasks}, max_workers={self.max_workers}")
+
         self.observation_space = gym.spaces.Dict(
             {
                 "queue_lengths": gym.spaces.Box(
                     low=0,
                     high=100,
-                    shape=(
-                        len(self.workflow.digital_twin.task_duration_distributions),
-                    ),
+                    shape=(num_tasks,),
                     dtype=np.float32,
                 ),
                 "worker_utilization": gym.spaces.Box(
                     low=0,
                     high=1,
-                    shape=(len(self.workers),),
+                    shape=(self.max_workers,),
                     dtype=np.float32,
                 ),
                 "case_age": gym.spaces.Box(
@@ -185,54 +198,71 @@ class SimEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(4)
 
     def _get_observation(self) -> Dict[str, Any]:
-        queue_lengths: Dict[str, int] = {
-            task: 0 for task in self.workflow.digital_twin.task_duration_distributions
-        }
-        for case in self.workflow.cases:
-            for task in case.tasks:
-                if task.status == "Pending":
-                    queue_lengths[task.name] += 1
-
-        worker_utilization: Dict[str, int] = {
-            worker_name: 0 for worker_name in self.workers
-        }
-
-        for worker_name, worker in self.workers.items():
-            is_busy = False
+        # Ensure consistent ordering of tasks and workers
+        task_names = sorted(list(self.workflow.digital_twin.task_duration_distributions.keys()))
+        worker_names = sorted(list(self.workers.keys()))
+        
+        queue_lengths = np.zeros(len(task_names), dtype=np.float32)
+        for i, task_name in enumerate(task_names):
+            count = 0
             for case in self.workflow.cases:
                 for task in case.tasks:
-                    if task.status == "Pending" and task.worker == worker.name:
-                        is_busy = True
-                        break
-                if is_busy:
-                    break
+                    if task.name == task_name and task.status == "Pending":
+                        count += 1
+            queue_lengths[i] = count
 
-        case_age = 0
+        # Initialize with zeros (padded to max_workers)
+        worker_utilization = np.zeros(self.max_workers, dtype=np.float32)
+        
+        # Fill in actual utilization
+        for i, worker_name in enumerate(worker_names):
+            if i >= self.max_workers:
+                break 
+            worker = self.workers[worker_name]
+            if worker.resource.count > 0:
+                worker_utilization[i] = 1.0
+            else:
+                worker_utilization[i] = 0.0
+
+        case_age = 0.0
         if self.workflow.cases:
-            case_age = self.env.now - self.workflow.cases[0].creation_time
+            pending_cases = [c for c in self.workflow.cases if c.status == "Pending"]
+            if pending_cases:
+                case_age = self.env.now - pending_cases[0].creation_time
 
-        task_completion_time: Dict[str, float] = {}
+        task_completion_times = []
         for case in self.workflow.cases:
             for task in case.tasks:
                 if task.status == "Completed":
-                    task_completion_time[task.name] = task.duration
+                    task_completion_times.append(task.duration)
+        
+        avg_completion_time = 0.0
+        if task_completion_times:
+            avg_completion_time = np.mean(task_completion_times)
 
         rejected_tasks_count: int = 0
         for case in self.workflow.cases:
             if case.status == "Rejected":
                 rejected_tasks_count += 1
 
-        return {
-            "queue_lengths": np.array(list(queue_lengths.values()), dtype=np.float32),
-            "worker_utilization": np.array(
-                list(worker_utilization.values()), dtype=np.float32
-            ),
-            "case_age": np.array(case_age, dtype=np.float32),
+        obs = {
+            "queue_lengths": queue_lengths,
+            "worker_utilization": worker_utilization,
+            "case_age": np.array([case_age], dtype=np.float32),
             "task_completion_time": np.array(
-                list(task_completion_time.values()), dtype=np.float32
+                [avg_completion_time], dtype=np.float32
             ),
-            "rejected_tasks_count": np.array(rejected_tasks_count, dtype=np.float32),
+            "rejected_tasks_count": np.array([rejected_tasks_count], dtype=np.float32),
         }
+        
+        # Debug checks
+        if obs['queue_lengths'].shape != self.observation_space['queue_lengths'].shape:
+            print(f"CRITICAL MISMATCH: queue_lengths obs {obs['queue_lengths'].shape} != space {self.observation_space['queue_lengths'].shape}")
+            
+        if obs['worker_utilization'].shape != self.observation_space['worker_utilization'].shape:
+            print(f"CRITICAL MISMATCH: worker_utilization obs {obs['worker_utilization'].shape} != space {self.observation_space['worker_utilization'].shape}")
+
+        return obs
 
     def _apply_action(self, action: int) -> None:
         if action == 1:
@@ -244,65 +274,48 @@ class SimEnv(gym.Env):
         pass
 
     def _reassign_task(self) -> None:
-        print("Reassigning a task")
         longest_waiting_task: Optional[Tuple[Case, Task]] = None
         longest_wait_time: float = -1
+        
         for case in self.workflow.cases:
             for task in case.tasks:
                 if task.status == "Pending":
-                    wait_time: float = (
-                        self.env.now - task.start_time
-                        if hasattr(task, "start_time")
-                        else 0
-                    )
+                    # Approximate wait time
+                    wait_time = self.env.now - case.creation_time
                     if wait_time > longest_wait_time:
                         longest_wait_time = wait_time
                         longest_waiting_task = (case, task)
 
         if longest_waiting_task:
-            case: Case
-            task: Task
             case, task = longest_waiting_task
-            print(f"Reassigning task '{task.name}' from Case {case.id}")
+            # print(f"Reassigning task '{task.name}' from Case {case.id}")
 
-            # Barebones Implementation
-            available_workers: List[Worker] = [
-                worker
-                for worker_name, worker in self.workers.items()
-                if worker_name
-                not in [
-                    t.worker
-                    for case in self.workflow.cases
-                    for t in case.tasks
-                    if t.status == "Pending"
-                ]
-            ]
-            if available_workers:
-                new_worker: Worker = available_workers[0]
-                print(f"Reassigning task '{task.name}' to worker {new_worker.name}")
-
-                if task in case.tasks:
-                    case.tasks.remove(task)
-                    task.worker = new_worker.name  # type: ignore[attr-defined]
-                    case.tasks.append(task)
-            else:
-                print("No workers available to reassign the task.")
-        else:
-            print("No tasks are waiting to be reassigned.")
+            # Find a worker who is free or has less load
+            # Simple logic: pick random other worker
+            current_worker = getattr(task, 'worker', None)
+            other_workers = [w for w in self.workers.keys() if w != current_worker]
+            
+            if other_workers:
+                new_worker_name = np.random.choice(other_workers)
+                task.worker = new_worker_name
+                print(f"Reassigned to {new_worker_name}")
 
     def _increase_case_priority(self) -> None:
         print("Increasing case priority")
-        case_id_to_increase: int = self.workflow.cases[0].id
-
-        for case in self.workflow.cases:
-            if case.id == case_id_to_increase:
-                case.priority -= 1
-                print(f"Increased priority of case {case.id} to {case.priority}")
-                break
+        pending_cases = [c for c in self.workflow.cases if c.status == "Pending"]
+        if pending_cases:
+            case = pending_cases[0]
+            case.priority -= 1
+            print(f"Increased priority of case {case.id} to {case.priority}")
 
     def _add_temporary_worker(self) -> None:
-        print("Adding a temporary worker")
+        # Count current temp workers
+        temp_workers = [w for w in self.workers.keys() if w.startswith("TempWorker")]
+        if len(temp_workers) >= 5:
+            print("Max temporary workers reached (5). Cannot add more.")
+            return
 
+        print("Adding a temporary worker")
         temp_worker_name = f"TempWorker_{len(self.workers) + 1}"
         temp_worker: Worker = Worker(temp_worker_name, self.env)
         self.workers[temp_worker_name] = temp_worker
@@ -310,23 +323,27 @@ class SimEnv(gym.Env):
 
     def _compute_reward(self) -> float:
         # Negative wait time
-        total_wait_time: float = 0
+        total_wait_time: float = 0.0
         for case in self.workflow.cases:
-            for task in case.tasks:
-                if task.status == "Pending":
-                    total_wait_time += task.duration
+             if case.status == "Pending":
+                 total_wait_time += float(self.env.now - case.creation_time)
+        
         reward: float = -total_wait_time * 0.1
 
-        rejected_count = self.observation_space["rejected_tasks_count"]  # type: ignore
+        # Use state value, not observation space definition
+        rejected_count = 0.0
+        if "rejected_tasks_count" in self.state:
+             rejected_count = float(self.state["rejected_tasks_count"][0])
+        
         reward -= rejected_count * 100.0
 
         # Reward for completed cases
         completed_cases: int = sum(
             1 for case in self.workflow.cases if case.status == "Accepted"
         )
-        reward += completed_cases * 50.0
+        reward += float(completed_cases * 50.0)
 
-        return reward
+        return float(reward)
 
     def _is_done(self) -> bool:
         return self.env.now >= (24 * 60)

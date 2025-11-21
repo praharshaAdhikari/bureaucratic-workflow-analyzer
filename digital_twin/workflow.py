@@ -68,6 +68,7 @@ class Workflow:
         if self.digital_twin.load_logs(filename):
             self.logs = self.digital_twin.logs
             self.digital_twin.analyze_durations()
+            self.digital_twin.estimate_arrival_rate()
             return self.logs
         else:
             print("Failed to load logs.")
