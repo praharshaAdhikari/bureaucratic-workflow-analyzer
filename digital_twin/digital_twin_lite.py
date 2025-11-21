@@ -10,7 +10,7 @@ class DigitalTwinLite:
     Estimates parameters for a simple stochastic digital twin from logs.csv.
     """
 
-    def __init__(self, logs_path="data_collection/data/logs.csv"):
+    def __init__(self, logs_path="logs.csv"):
         self.logs_path = logs_path
         self.logs = None
         self.task_duration_distributions = {}  # task_name -> (dist_type, dist_params)

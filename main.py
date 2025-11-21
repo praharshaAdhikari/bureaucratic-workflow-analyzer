@@ -1,9 +1,5 @@
 """
 Main execution script for workflow simulation.
-
-This script runs the workflow simulation by orchestrating the different
-components: reading logs, setting up workers, running the simulation,
-and generating reports.
 """
 
 import os
@@ -11,6 +7,9 @@ import os
 import simpy
 
 from digital_twin.sim_env import SimEnv
+from digital_twin.workflow import Workflow
+from rl.evaluate_rl import evaluate
+from rl.train_rl import train
 
 
 def main():
@@ -18,8 +17,10 @@ def main():
     # Create simulation environment
     env = simpy.Environment()
 
-    # Define worker resources (example)
-    workers = []  # Replace with actual worker names
+    workflow = Workflow("Workflow", env)
+    workflow.read_logs()
+    workers = list(workflow.logs["Worker"].unique())
+
     twin_params = {"workers": workers}
 
     # Create SimEnv instance, passing in the env
@@ -28,9 +29,16 @@ def main():
     sim_env.reset()
 
     # Run the simulation
-    env.run(until=24 * 60)
+    # env.run(until=24 * 60)  # example: run for 24 hours
+
     # Generate final report
-    # workflow.generate_report() # there is no workflow, so comment this out.
+    # workflow.generate_report()
+
+    # Train the RL agent:
+    train(sim_env)
+
+    # Evaluate RL agent
+    # evaluate(sim_env)
 
 
 if __name__ == "__main__":
