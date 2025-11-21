@@ -42,6 +42,7 @@ class Case:
         self.status = "Pending"
         self.priority = 0
         self.creation_time = env.now
+        self.completion_time = None
 
     def start_work(self) -> None:
         """Start processing work for this case."""
@@ -90,6 +91,8 @@ class Case:
                 if all(task.status == "Completed" for task in self.tasks)
                 else "Rejected"
             )
+            if self.status == "Accepted":
+                self.completion_time = self.env.now
             print(
                 f"Case {self.id} completed with status: {self.status} at time {self.env.now}"
             )

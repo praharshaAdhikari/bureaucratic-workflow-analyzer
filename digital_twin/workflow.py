@@ -68,7 +68,13 @@ class Workflow:
         if self.digital_twin.load_logs(filename):
             self.logs = self.digital_twin.logs
             self.digital_twin.analyze_durations()
-            self.digital_twin.estimate_arrival_rate()
+            
+            # Only estimate if not already set (e.g. by twin_params)
+            if self.digital_twin.arrival_rate == 0.0:
+                self.digital_twin.estimate_arrival_rate()
+            else:
+                print(f"Using existing arrival rate: {self.digital_twin.arrival_rate}")
+                
             return self.logs
         else:
             print("Failed to load logs.")

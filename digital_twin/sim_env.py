@@ -43,8 +43,16 @@ class SimEnv(gym.Env):
         self, seed: Optional[int] = None, options: Optional[Dict] = None
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         super().reset(seed=seed)
+        
         self.env = simpy.Environment()
-        self.workflow = Workflow("Workflow", self.env)
+        
+      
+        if hasattr(self, 'workflow') and self.workflow is not None:
+            self.workflow.cases.clear()
+            self.workflow.env = self.env 
+        else:
+            self.workflow = Workflow("Workflow", self.env)
+            
         self._load_digital_twin()
         self._setup_workers()
         self._start_arrival_process()
@@ -130,14 +138,14 @@ class SimEnv(gym.Env):
         print(f"Case {case_id} completed at time {self.env.now:.2f}")
 
     def _perform_task(self, worker: Worker, task: Task) -> Generator[Any, None, None]:
-        print(
-            f"Worker {worker.name} is starting task {task.name} at time {self.env.now:.2f}"
-        )
-        yield self.env.timeout(task.duration)
-        task.status = "Completed"
-        print(
-            f"Worker {worker.name} completed task {task.name} at time {self.env.now:.2f}"
-        )
+        # Request worker resource to ensure exclusivity
+        with worker.resource.request() as req:
+            yield req # Wait for worker to be free
+            
+            print(f"Worker {worker.name} is starting task {task.name} at time {self.env.now:.2f}")
+            yield self.env.timeout(task.duration)
+            task.status = "Completed"
+            print(f"Worker {worker.name} completed task {task.name} at time {self.env.now:.2f}")
 
     def _sample_duration(self, task_name: str) -> float:
         dist_type: str
@@ -161,7 +169,6 @@ class SimEnv(gym.Env):
     def _define_spaces(self) -> None:
         num_tasks = len(self.workflow.digital_twin.task_duration_distributions)
         
-        # Define a maximum number of workers to allow for dynamic addition
         # Base workers + max temp workers (e.g., 5)
         self.max_workers = 15
         
@@ -198,7 +205,6 @@ class SimEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(4)
 
     def _get_observation(self) -> Dict[str, Any]:
-        # Ensure consistent ordering of tasks and workers
         task_names = sorted(list(self.workflow.digital_twin.task_duration_distributions.keys()))
         worker_names = sorted(list(self.workers.keys()))
         
@@ -211,10 +217,8 @@ class SimEnv(gym.Env):
                         count += 1
             queue_lengths[i] = count
 
-        # Initialize with zeros (padded to max_workers)
         worker_utilization = np.zeros(self.max_workers, dtype=np.float32)
         
-        # Fill in actual utilization
         for i, worker_name in enumerate(worker_names):
             if i >= self.max_workers:
                 break 
@@ -291,14 +295,28 @@ class SimEnv(gym.Env):
             # print(f"Reassigning task '{task.name}' from Case {case.id}")
 
             # Find a worker who is free or has less load
-            # Simple logic: pick random other worker
-            current_worker = getattr(task, 'worker', None)
-            other_workers = [w for w in self.workers.keys() if w != current_worker]
+            current_worker_name = task.assigned_worker_name
             
-            if other_workers:
-                new_worker_name = np.random.choice(other_workers)
-                task.worker = new_worker_name
-                print(f"Reassigned to {new_worker_name}")
+            best_worker_name = None
+            min_load = float('inf')
+            
+            for name, worker in self.workers.items():
+                if name == current_worker_name:
+                    continue
+                    
+                # Calculating load
+                load = len(worker.resource.queue) + worker.resource.count
+                
+                if load < min_load:
+                    min_load = load
+                    best_worker_name = name
+                elif load == min_load:
+                    if np.random.random() < 0.5:
+                        best_worker_name = name
+
+            if best_worker_name:
+                task.assigned_worker_name = best_worker_name
+                print(f"Reassigned task {task.name} (Case {case.id}) from {current_worker_name} to {best_worker_name} (Load: {min_load})")
 
     def _increase_case_priority(self) -> None:
         print("Increasing case priority")

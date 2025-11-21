@@ -8,7 +8,7 @@ def train():
         "arrival_rate": 0.5,
     }
 
-    env = SimEnv(twin_params=twin_params, logs_path="logs.csv")
+    env = SimEnv(twin_params=twin_params, logs_path="logs.csv", decision_interval=10.0)
     
     print("Checking environment compatibility...")
     try:
