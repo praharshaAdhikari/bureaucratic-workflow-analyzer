@@ -9,17 +9,17 @@ in a workflow with their properties and status.
 class Task:
     """
     Represents a single task in a workflow.
-    
+
     Attributes:
         name (str): The name/type of the task
         duration (float): Duration of the task in minutes
         status (str): Current status of the task ('Pending', 'Completed', 'Rejected')
     """
-    
-    def __init__(self, name: str, duration: float) -> None:
+
+    def __init__(self, name: str, duration: float, case=None) -> None:
         """
         Initialize a new Task.
-        
+
         Args:
             name: The name/type of the task
             duration: Duration of the task in minutes
@@ -27,7 +27,8 @@ class Task:
         self.name = name
         self.duration = duration
         self.status = "Pending"
-    
+        self.case = case
+
     def __repr__(self) -> str:
         """String representation of the task."""
         return f"Task(name='{self.name}', duration={self.duration}, status='{self.status}')"
