@@ -36,6 +36,20 @@ class SimEnv(gym.Env):
         self.workflow: Workflow = Workflow("Workflow", self.env)
 
         self._load_digital_twin()
+        # Allow twin_params to override estimates from logs (e.g. arrival_rate)
+        if isinstance(twin_params, dict) and "arrival_rate" in twin_params:
+            try:
+                # Apply override to the workflow's digital twin if present
+                self.workflow.digital_twin.arrival_rate = float(twin_params["arrival_rate"])
+                print(
+                    f"Overriding digital twin arrival_rate -> {self.workflow.digital_twin.arrival_rate} cases/min"
+                )
+            except Exception:
+                print("Warning: invalid arrival_rate in twin_params; ignoring override.")
+        tasks = self.workflow.tasks or []
+        print(f"Loaded tasks: {len(tasks)}")
+
+
         self._setup_workers()
         self._define_spaces()
 
@@ -107,35 +121,73 @@ class SimEnv(gym.Env):
 
     def _create_case(self, case_id):
         print(f"Creating new case {case_id} at time {self.env.now:.2f}")
-        case_tasks = self.workflow.logs[self.workflow.logs["CaseID"] == case_id]
-        if case_tasks.empty:
-            print(f"Warning: No tasks found for case {case_id} in logs.")
-            return
+
+        # Try to find a corresponding case in the historical logs
+        case_tasks = (
+            self.workflow.logs[self.workflow.logs["CaseID"] == case_id]
+            if self.workflow.logs is not None
+            else None
+        )
+
+        # If no exact match, sample an existing case template from the logs
+        if case_tasks is None or case_tasks.empty:
+            if self.workflow.logs is None or self.workflow.logs.empty:
+                print(f"Warning: No logs available to create case {case_id}.")
+                return
+            # Pick a random template case from the logs
+            template_case_id = np.random.choice(self.workflow.logs["CaseID"].unique())
+            case_tasks = self.workflow.logs[self.workflow.logs["CaseID"] == template_case_id]
+            print(
+                f"No exact match for case {case_id}; sampling template case {template_case_id} from logs."
+            )
 
         case_tasks = case_tasks.sort_values(by="StartTime")
+
+        # Create a Case instance and add it to the workflow
+        case = Case(case_id, self.env)
+        self.workflow.cases.append(case)
+        case.start_work()
 
         for _, task_row in case_tasks.iterrows():
             task_name = task_row["Task"]
             duration = self.workflow.digital_twin.sample_duration(task_name)
-            task = Task(task_name, duration, case=self)
-            worker_name = task_row["Worker"]
-            worker = self.workers.get(worker_name)
-            if not worker:
-                print(
-                    f"Warning: No worker found named {worker_name} for task {task_name}"
-                )
-                continue
+            # Attach the task to the case (so priority and completion checks work)
+            task = Task(task_name, duration, case=case)
 
-            print(
-                f"Case {case_id}: starting task '{task_name}' for {duration:.2f} minutes"
-            )
-            yield self.env.process(self._perform_task(worker, task))
+            worker_name = task_row.get("Worker") if isinstance(task_row, dict) else task_row["Worker"]
+            worker = self.workers.get(worker_name)
+
+            if worker is None:
+                # If the exact worker doesn't exist in the current environment, pick any worker
+                available = list(self.workers.values())
+                if not available:
+                    print(
+                        f"No workers available to perform task '{task_name}' for case {case_id}. Skipping task."
+                    )
+                    continue
+                worker = np.random.choice(available)
+                print(
+                    f"No worker named {worker_name} found — assigned {worker.name} for task '{task_name}'."
+                )
+
+            # Register the task and worker on the case
+            case.tasks.append(task)
+            case.workers.append(worker)
+
+            print(f"Case {case_id}: scheduling task '{task_name}' for {duration:.2f} minutes with worker {worker.name}")
+
+            # Use the Case.assign_task which will manage the worker.perform_task and case completion checks
+            yield self.env.process(case.assign_task(worker, task, speed=1.0, expected_status="Completed"))
+
             if task.status != "Completed":
                 print(
                     f"Case {case_id}: Task {task.name} was not completed, breaking case workflow"
                 )
                 break
-        print(f"Case {case_id} completed at time {self.env.now:.2f}")
+
+        # case.check_completion() should have been called after tasks, but call again to be sure
+        case.check_completion()
+        print(f"Case {case_id} completed with status {case.status} at time {self.env.now:.2f}")
 
     def _perform_task(self, worker: Worker, task: Task) -> Generator[Any, None, None]:
         # Request worker resource to ensure exclusivity

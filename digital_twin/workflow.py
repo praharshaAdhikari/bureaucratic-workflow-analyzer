@@ -68,6 +68,10 @@ class Workflow:
         if self.digital_twin.load_logs(filename):
             self.logs = self.digital_twin.logs
             self.digital_twin.analyze_durations()
+
+            self.tasks = self._extract_tasks_from_logs(self.logs)
+            print(f"Loaded tasks: {len(self.tasks)}")
+
             
             # Only estimate if not already set (e.g. by twin_params)
             if self.digital_twin.arrival_rate == 0.0:
@@ -80,6 +84,26 @@ class Workflow:
             print("Failed to load logs.")
             self.logs = None
             return None
+    
+    def _extract_tasks_from_logs(self, logs: pd.DataFrame) -> list:
+        """
+        Convert logs into task objects
+        """
+        tasks = []
+        if logs is None or logs.empty:
+            print("No valid logs found.")
+            return tasks
+
+        for _, row in logs.iterrows():
+            task = Task(
+                case = row["CaseID"],
+                duration = row["EndTime"] - row["StartTime"],
+                name = row["Task"]
+            )
+            tasks.append(task)
+        
+        return tasks
+
 
     def prompt_ideal_durations(self, filename: str = "ideal_durations.csv") -> None:
         """
