@@ -347,7 +347,8 @@ class SimEnv(gym.Env):
             # print(f"Reassigning task '{task.name}' from Case {case.id}")
 
             # Find a worker who is free or has less load
-            current_worker_name = task.assigned_worker_name
+            # Be defensive in case task wasn't annotated with assigned_worker_name
+            current_worker_name = getattr(task, "assigned_worker_name", None)
             
             best_worker_name = None
             min_load = float('inf')

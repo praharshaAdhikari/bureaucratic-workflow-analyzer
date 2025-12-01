@@ -68,6 +68,12 @@ class Case:
             SimPy process for the worker performing the task
         """
         print(f"Assigning task {task.name} to worker {worker.name}")
+        # record which worker is assigned to the task (used by reassign logic)
+        try:
+            task.assigned_worker_name = worker.name
+        except Exception:
+            # If Task doesn't expose attribute, ignore — older versions
+            pass
         yield self.env.process(
             worker.perform_task(task, self.env, speed, expected_status)
         )
