@@ -4,30 +4,70 @@ import numpy as np
 import pandas as pd
 from digital_twin.sim_env import SimEnv
 import matplotlib.pyplot as plt
+import torch
+
+# def calculate_baseline_metrics(logs_path="logs.csv"):
+#     """Calculate metrics from the historical logs for comparison."""
+#     try:
+#         df = pd.read_csv(logs_path)
+#         df['StartTime'] = pd.to_datetime(df['StartTime'])
+#         df['EndTime'] = pd.to_datetime(df['EndTime'])
+        
+#         # Case Duration
+#         case_durations = []
+#         for case_id in df['CaseID'].unique():
+#             case_df = df[df['CaseID'] == case_id]
+#             start = case_df['StartTime'].min()
+#             end = case_df['EndTime'].max()
+#             duration = (end - start).total_seconds() / 60.0
+#             case_durations.append(duration)
+            
+#         avg_duration = np.mean(case_durations) if case_durations else 0
+#         median_duration = np.median(case_durations) if case_durations else 0
+        
+#         # Throughput (Cases per day)
+#         total_duration_days = (df['EndTime'].max() - df['StartTime'].min()).total_seconds() / (60*60*24)
+#         throughput = len(case_durations) / max(1.0, total_duration_days)
+        
+#         return {
+#             "avg_duration": avg_duration,
+#             "median_duration": median_duration,
+#             "throughput_per_day": throughput,
+#             "total_cases": len(case_durations)
+#         }
+#     except Exception as e:
+#         print(f"Error calculating baseline: {e}")
+#         return None
+
 
 def calculate_baseline_metrics(logs_path="logs.csv"):
-    """Calculate metrics from the historical logs for comparison."""
+    import pandas as pd
+    import numpy as np
+    
     try:
         df = pd.read_csv(logs_path)
-        df['StartTime'] = pd.to_datetime(df['StartTime'])
-        df['EndTime'] = pd.to_datetime(df['EndTime'])
-        
+
+        # Convert to numeric minutes instead of datetime
+        df['StartTime'] = df['StartTime'].astype(float)
+        df['EndTime']   = df['EndTime'].astype(float)
+
         # Case Duration
         case_durations = []
         for case_id in df['CaseID'].unique():
             case_df = df[df['CaseID'] == case_id]
             start = case_df['StartTime'].min()
             end = case_df['EndTime'].max()
-            duration = (end - start).total_seconds() / 60.0
+            duration = end - start
             case_durations.append(duration)
-            
+
         avg_duration = np.mean(case_durations) if case_durations else 0
         median_duration = np.median(case_durations) if case_durations else 0
-        
-        # Throughput (Cases per day)
-        total_duration_days = (df['EndTime'].max() - df['StartTime'].min()).total_seconds() / (60*60*24)
-        throughput = len(case_durations) / max(1.0, total_duration_days)
-        
+
+        # Throughput (Cases / day)
+        total_minutes = df['EndTime'].max() - df['StartTime'].min()
+        total_days = total_minutes / 1440  # convert minutes → days
+        throughput = len(case_durations) / max(1.0, total_days)
+
         return {
             "avg_duration": avg_duration,
             "median_duration": median_duration,
@@ -38,7 +78,17 @@ def calculate_baseline_metrics(logs_path="logs.csv"):
         print(f"Error calculating baseline: {e}")
         return None
 
+
 def evaluate():
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    if device.type == "cuda":
+        print(f"GPU detected: {torch.cuda.get_device_name(0)}")
+    else:
+        print("⚠️ No GPU found. Using CPU.")
+
+
     # Load the environment with a higher arrival rate to stress test
     # 0.5 cases/min = 30 cases/hour = 720 cases/day (much higher than logs likely, but good for stress test)
     # Or we can try to match a busy day.
@@ -52,8 +102,8 @@ def evaluate():
 
     # Load the trained model
     try:
-        model = PPO.load("ppo_bureaucracy_v1")
-        print("Model loaded successfully.")
+        model = PPO.load("ppo_bureaucracy_v1", device=device)  # <-- THIS IS THE IMPORTANT CHANGE; USING GPU
+        print("Model loaded successfully on", device)
     except FileNotFoundError:
         print("Model not found. Please train the model first.")
         return

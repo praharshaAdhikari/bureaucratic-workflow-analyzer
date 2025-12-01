@@ -6,6 +6,9 @@ in a workflow with their properties and status.
 """
 
 
+from typing import Optional
+
+
 class Task:
     """
     Represents a single task in a workflow.
@@ -28,7 +31,9 @@ class Task:
         self.duration = duration
         self.status = "Pending"
         self.case = case
+        # Name of the worker currently assigned to this task (if any)
+        self.assigned_worker_name: Optional[str] = None
 
     def __repr__(self) -> str:
         """String representation of the task."""
-        return f"Task(name='{self.name}', duration={self.duration}, status='{self.status}')"
+        return f"Task(name='{self.name}', duration={self.duration}, status='{self.status}', assigned_worker={self.assigned_worker_name})"
