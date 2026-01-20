@@ -125,85 +125,66 @@ class SimEnv(gym.Env):
     def _create_case(self, case_id):
         print(f"Creating new case {case_id} at time {self.env.now:.2f}")
 
-        # --- Load or sample case template ---
-        if self.workflow.logs is None or self.workflow.logs.empty:
-            print(f"Warning: No logs available to create case {case_id}.")
-            return
+        # Try to find a corresponding case in the historical logs
+        case_tasks = (
+            self.workflow.logs[self.workflow.logs["CaseID"] == case_id]
+            if self.workflow.logs is not None
+            else None
+        )
 
-        case_tasks = self.workflow.logs[self.workflow.logs["CaseID"] == case_id]
-
-        if case_tasks.empty:
+        # If no exact match, sample an existing case template from the logs
+        if case_tasks is None or case_tasks.empty:
+            if self.workflow.logs is None or self.workflow.logs.empty:
+                print(f"Warning: No logs available to create case {case_id}.")
+                return
+            # Pick a random template case from the logs
             template_case_id = np.random.choice(self.workflow.logs["CaseID"].unique())
             case_tasks = self.workflow.logs[self.workflow.logs["CaseID"] == template_case_id]
             print(
-                f"No exact match for case {case_id}; "
-                f"sampling template case {template_case_id} from logs."
+                f"No exact match for case {case_id}; sampling template case {template_case_id} from logs."
             )
 
         case_tasks = case_tasks.sort_values(by="StartTime")
 
-        # --- Create case ---
+        # Create a Case instance and add it to the workflow
         case = Case(case_id, self.env)
         self.workflow.cases.append(case)
         case.start_work()
 
-        # --- Execute tasks SEQUENTIALLY within the case ---
         for _, task_row in case_tasks.iterrows():
             task_name = task_row["Task"]
             duration = self.workflow.digital_twin.sample_duration(task_name)
-
+            # Attach the task to the case (so priority and completion checks work)
             task = Task(task_name, duration, case=case)
 
-            worker_name = task_row["Worker"]
+            worker_name = task_row.get("Worker") if isinstance(task_row, dict) else task_row["Worker"]
             worker = self.workers.get(worker_name)
 
             if worker is None:
+                # If the exact worker doesn't exist in the current environment, pick any worker
                 available = list(self.workers.values())
                 if not available:
                     print(
-                        f"No workers available for task '{task_name}' "
-                        f"in case {case_id}. Rejecting case."
+                        f"No workers available to perform task '{task_name}' for case {case_id}. Skipping task."
                     )
-                    case.status = "Rejected"
-                    return
+                    continue
                 worker = np.random.choice(available)
                 print(
-                    f"No worker named {worker_name}; "
-                    f"assigned {worker.name} for task '{task_name}'."
+                    f"No worker named {worker_name} found — assigned {worker.name} for task '{task_name}'."
                 )
 
+            # Register the task and worker on the case
             case.tasks.append(task)
             case.workers.append(worker)
 
-            print(
-                f"Case {case_id}: starting task '{task_name}' "
-                f"({duration:.2f} min) with worker {worker.name}"
-            )
+            print(f"Case {case_id}: scheduling task '{task_name}' for {duration:.2f} minutes with worker {worker.name}")
 
-            # IMPORTANT: wait for this task before starting the next
-            yield self.env.process(
-                case.assign_task(
-                    worker,
-                    task,
-                    speed=1.0,
-                    expected_status="Completed",
-                )
-            )
-
-            if task.status != "Completed":
-                print(
-                    f"Case {case_id}: task '{task_name}' failed. Rejecting case."
-                )
-                case.status = "Rejected"
-                return
-
-        # --- FINALIZE CASE ---
-        case.check_completion()
-
-        print(
-            f"Case {case_id} completed with status {case.status} "
-            f"at time {self.env.now:.2f}"
-        )
+            # SPAWN the task as a non-blocking process instead of waiting for it
+            # This allows multiple cases to execute concurrently
+            self.env.process(case.assign_task(worker, task, speed=1.0, expected_status="Completed"))
+        
+        # Yield once to make this a valid generator for SimPy
+        yield self.env.timeout(0)
 
     def _perform_task(self, worker: Worker, task: Task) -> Generator[Any, None, None]:
         # Request worker resource to ensure exclusivity
@@ -423,79 +404,60 @@ class SimEnv(gym.Env):
 
     def _compute_reward(self) -> float:
         """
-        Reward function focused on throughput and cycle time efficiency.
-        Uses dense, balanced signals for better RL learning.
+        Compute reward balancing multiple objectives:
+        1. Case duration (shorter is better)
+        2. Throughput (more completions is better)
+        3. Queue efficiency (lower queues is better)
+        4. Worker utilization (higher is better)
+        5. Cost control (fewer temp workers is better)
         """
         reward: float = 0.0
-        
-        # === DENSE REWARDS (every step) ===
-        
-        # 1. THROUGHPUT: Reward based on completion RATE (not just count)
-        # This gives credit proportional to recent progress
-        completed_this_step = 0
+
+        # 1. PENALIZE WAIT TIME (but normalize by queue depth to avoid favoring empty system)
+        total_wait_time: float = 0.0
+        pending_count: int = 0
         for case in self.workflow.cases:
-            if case.status == "Accepted" and hasattr(case, 'completion_time'):
-                # Only count if completed recently (within last decision_interval)
-                if self.env.now - case.completion_time <= self.decision_interval:
-                    completed_this_step += 1
+            if case.status == "Pending":
+                total_wait_time += float(self.env.now - case.creation_time)
+                pending_count += 1
         
-        reward += completed_this_step * 50.0  # Dense signal every step
+        # Only penalize if there are pending cases; normalize by count
+        if pending_count > 0:
+            avg_wait = total_wait_time / pending_count
+            reward -= avg_wait * 0.05  # Reduced weight from 0.1 to 0.05
         
-        # 2. CYCLE TIME: Penalize based on average age of IN-PROGRESS cases
-        # (not just pending - we care about total time in system)
-        active_cases = [c for c in self.workflow.cases 
-                        if c.status == "Pending"]
-        
-        if active_cases:
-            total_age = sum(self.env.now - c.creation_time for c in active_cases)
-            avg_age = total_age / len(active_cases)
-            # Normalize: penalize more as cases age (exponential penalty)
-            reward -= np.log1p(avg_age) * 2.0  # log scale, less extreme
-        
-        # 3. QUEUE HEALTH: Penalize queue buildup (system instability indicator)
-        if "queue_lengths" in self.state:
-            total_queue = float(np.sum(self.state["queue_lengths"]))
-            # Quadratic penalty: small queues OK, large queues very bad
-            reward -= (total_queue ** 1.5) * 0.1
-        
-        # 4. REJECTIONS: Heavy penalty (these are failures)
+        # 2. REWARD COMPLETED CASES (primary objective: throughput)
+        completed_cases: int = sum(
+            1 for case in self.workflow.cases if case.status == "Accepted"
+        )
+        reward += float(completed_cases * 100.0)  # Increased from 50.0
+
+        # 3. PENALIZE REJECTIONS
         rejected_count = 0.0
         if "rejected_tasks_count" in self.state:
             rejected_count = float(self.state["rejected_tasks_count"][0])
-        reward -= rejected_count * 100.0  # Keep this high
-        
-        # === EFFICIENCY INCENTIVES ===
-        
-        # 5. RESOURCE EFFICIENCY: Balance utilization with cost
+        reward -= rejected_count * 50.0  # Reduced from 100.0 to balance
+
+        # 4. PENALIZE HIGH QUEUE LENGTHS (system instability)
+        if "queue_lengths" in self.state:
+            avg_queue = float(np.mean(self.state["queue_lengths"]))
+            reward -= avg_queue * 0.5  # Penalize long queues
+
+        # 5. REWARD HIGH UTILIZATION (efficient resource use)
         if "worker_utilization" in self.state:
-            base_workers = len([w for w in self.workers.keys() 
-                            if not w.startswith("TempWorker")])
-            temp_workers = len([w for w in self.workers.keys() 
-                            if w.startswith("TempWorker")])
-            
             avg_utilization = float(np.mean(self.state["worker_utilization"]))
-            
-            # Reward utilization ONLY if we have work to do
-            if active_cases:
-                # Target ~80% utilization (not 100% - need slack for flexibility)
-                target_util = 0.8
-                util_bonus = -abs(avg_utilization - target_util) * 5.0
-                reward += util_bonus
-            
-            # Cost penalty for temp workers (operating cost)
-            reward -= temp_workers * 3.0
-        
-        # === BONUS FOR EMPTYING SYSTEM ===
-        # Encourage clearing backlog
-        if len(active_cases) == 0 and len(self.workflow.cases) > 0:
-            reward += 20.0  # Bonus for clean slate
-        
+            reward += avg_utilization * 10.0  # Reward keeping workers busy
+
+        # 6. PENALIZE EXCESSIVE TEMPORARY WORKERS (resource cost)
+        temp_worker_count = len([w for w in self.workers.keys() if w.startswith("TempWorker")])
+        reward -= temp_worker_count * 5.0  # Discourage adding unnecessary workers
+
         return float(reward)
 
     def _is_done(self) -> bool:
         # Episode length: 4 hours (240 minutes) = 24 decision steps
         # This is much faster for training while still realistic
-        return self.env.now >= (24 * 60)
+        return self.env.now >= (4 * 60)
 
     def render(self) -> None:
         if self.render_mode == "human":

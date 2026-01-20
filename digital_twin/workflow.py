@@ -166,7 +166,7 @@ class Workflow:
             print("Logs not loaded. Please run read_logs() first.")
             return
 
-        self.workers = [Worker(name, self.env) for name in self.logs["Worker"].unique()]
+        self.workers = [Worker(name, self.env) for name in self.logs["Worker"].unique() if pd.notna(name)]
 
     def start(self, speed: float) -> None:
         """
