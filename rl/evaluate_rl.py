@@ -40,12 +40,12 @@ import torch
 #         return None
 
 
-def calculate_baseline_metrics(logs_path="logs.csv"):
+def calculate_baseline_metrics(logs_path="logs.csv", sep=';'):
     import pandas as pd
     import numpy as np
     
     try:
-        df = pd.read_csv(logs_path)
+        df = pd.read_csv(logs_path, sep=sep)
 
         # Convert to numeric minutes instead of datetime
         df['StartTime'] = df['StartTime'].astype(float)
@@ -79,14 +79,14 @@ def calculate_baseline_metrics(logs_path="logs.csv"):
         return None
 
 
-def evaluate():
+def evaluate(logs_path="logs.csv", sep=';'):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     if device.type == "cuda":
         print(f"GPU detected: {torch.cuda.get_device_name(0)}")
     else:
-        print("⚠️ No GPU found. Using CPU.")
+        print("No GPU found. Using CPU.")
 
 
     # Load the environment with a higher arrival rate to stress test
@@ -98,7 +98,7 @@ def evaluate():
     # Run for a longer time: 1440 mins = 24 hours
     sim_duration = 1440 * 5 # 5 days
     
-    env = SimEnv(twin_params=twin_params, logs_path="logs.csv", decision_interval=10.0)
+    env = SimEnv(twin_params=twin_params, logs_path=logs_path, decision_interval=10.0)
 
     # Load the trained model
     try:
@@ -110,7 +110,7 @@ def evaluate():
 
     # Baseline
     print("Calculating baseline metrics from logs...")
-    baseline = calculate_baseline_metrics("logs.csv")
+    baseline = calculate_baseline_metrics(logs_path, sep=';')
     if baseline:
         print(f"Baseline Avg Duration: {baseline['avg_duration']:.2f} mins")
         print(f"Baseline Throughput: {baseline['throughput_per_day']:.2f} cases/day")
@@ -177,10 +177,13 @@ def evaluate():
     rl_avg_duration = np.mean(all_case_durations) if all_case_durations else 0
     rl_throughput = total_completed_cases / (sim_duration / (60*24)) # cases per day
     
+    baseline_avg_duration = f"{baseline['avg_duration']:<15.2f}" if baseline else "N/A"
+    baseline_throughput = f"{baseline['throughput_per_day']:<15.2f}" if baseline else "N/A"
+    
     print(f"{'Metric':<25} | {'Baseline':<15} | {'RL Agent':<15}")
     print("-" * 60)
-    print(f"{'Avg Case Duration (min)':<25} | {baseline['avg_duration'] if baseline else 'N/A':<15.2f} | {rl_avg_duration:<15.2f}")
-    print(f"{'Throughput (cases/day)':<25} | {baseline['throughput_per_day'] if baseline else 'N/A':<15.2f} | {rl_throughput:<15.2f}")
+    print(f"{'Avg Case Duration (min)':<25} | {baseline_avg_duration:<15} | {rl_avg_duration:<15.2f}")
+    print(f"{'Throughput (cases/day)':<25} | {baseline_throughput:<15} | {rl_throughput:<15.2f}")
     print(f"{'Avg Queue Length':<25} | {'N/A':<15} | {np.mean(all_queue_lengths):<15.2f}")
     print(f"{'Avg Utilization':<25} | {'N/A':<15} | {np.mean(all_worker_utilization):<15.2f}")
     print("="*40)
@@ -193,4 +196,8 @@ def evaluate():
     print("Baseline metrics are from historical logs which may have different load.")
 
 if __name__ == "__main__":
-    evaluate()
+    import argparse
+    parser = argparse.ArgumentParser(description="Evaluate RL agent on test logs")
+    parser.add_argument("--logs", default="logs_test.csv", help="Path to test logs CSV (default: logs_test.csv)")
+    args = parser.parse_args()
+    evaluate(logs_path=args.logs)

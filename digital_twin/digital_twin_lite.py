@@ -18,7 +18,7 @@ class DigitalTwinLite:
 
     def load_logs(self, filename="logs.csv"):
         try:
-            self.logs = pd.read_csv(filename)
+            self.logs = pd.read_csv(filename, sep=';')
             # Validating present columns
             required_columns = ["CaseID", "Task", "Worker", "StartTime", "EndTime"]
             if not all(col in self.logs.columns for col in required_columns):
@@ -126,18 +126,29 @@ class DigitalTwinLite:
         grouped = self.logs.groupby("Task")["Duration"]
         for task, durations in grouped:
             durations = durations.dropna().values
-            if len(durations) < 5:
+            
+            # Filter out non-positive durations (lognorm requires x > 0)
+            valid_durations = durations[durations > 0]
+            
+            if len(valid_durations) < len(durations):
+                filtered_count = len(durations) - len(valid_durations)
                 print(
-                    f"Warning: Not enough data for task '{task}' to fit distribution.  Using empirical samples."
+                    f"Note: Filtered out {filtered_count} non-positive duration(s) for task '{task}'"
+                )
+            
+            if len(valid_durations) < 5:
+                print(
+                    f"Warning: Not enough valid data for task '{task}' to fit distribution. Using empirical samples."
                 )
                 self.task_duration_distributions[task] = (
                     "empirical",
-                    durations.tolist(),
+                    valid_durations.tolist() if len(valid_durations) > 0 else [10.0],
                 )
                 continue
+            
             # Fit a lognormal distribution (common for durations)
             try:
-                shape, loc, scale = stats.lognorm.fit(durations, floc=0)
+                shape, loc, scale = stats.lognorm.fit(valid_durations, floc=0)
                 self.task_duration_distributions[task] = (
                     "lognorm",
                     (shape, loc, scale),
@@ -151,7 +162,7 @@ class DigitalTwinLite:
                 )
                 self.task_duration_distributions[task] = (
                     "empirical",
-                    durations.tolist(),
+                    valid_durations.tolist(),
                 )  # fallback
 
     def estimate_arrival_rate(self):
