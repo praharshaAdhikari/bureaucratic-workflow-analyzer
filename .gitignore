@@ -57,6 +57,8 @@ venv.bak/
 !logs.csv  # Keep the main logs file
 *.xlsx
 *.xls
+*.json
+*.parquet
 
 # Output files
 *.txt
