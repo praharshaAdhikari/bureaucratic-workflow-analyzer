@@ -1,0 +1,36 @@
+{
+  "activities": [
+    "A_Accepted",
+    "A_Cancelled",
+    "A_Complete",
+    "A_Concept",
+    "A_Create Application",
+    "A_Denied",
+    "A_Incomplete",
+    "A_Pending",
+    "A_Submitted",
+    "A_Validating",
+    "O_Accepted",
+    "O_Cancelled",
+    "O_Create Offer",
+    "O_Created",
+    "O_Refused",
+    "O_Returned",
+    "O_Sent (mail and online)",
+    "O_Sent (online only)",
+    "W_Assess potential fraud",
+    "W_Call after offers",
+    "W_Call incomplete files",
+    "W_Complete application",
+    "W_Handle leads",
+    "W_Personal Loan collection",
+    "W_Shortened completion ",
+    "W_Validate application"
+  ],
+  "bad_terminals": [
+    "A_Cancelled",
+    "A_Denied",
+    "O_Cancelled",
+    "O_Refused"
+  ]
+}

@@ -1,0 +1,95 @@
+from_activity,to_activity,rl_count,random_count,rl_pct,random_pct,preference_ratio,log2_ratio,avg_reward_rl,in_real_log,transition_type
+W_Nabellen offertes,W_Wijzigen contractgegevens,300,0,50.0,0.0,18.515,4.211,0.25,True,learned_prefer
+W_Nabellen incomplete dossiers,A_ACTIVATED,302,0,50.2,0.0,17.573,4.135,0.248,True,learned_prefer
+W_Valideren aanvraag,O_SELECTED,313,0,34.8,0.0,13.577,3.763,0.237,True,learned_prefer
+W_Valideren aanvraag,O_CREATED,287,0,31.9,0.0,12.451,3.638,0.25,False,impossible
+W_Completeren aanvraag,W_Beoordelen fraude,300,5,100.0,9.6,9.545,3.255,0.249,True,learned_prefer
+W_Afhandelen leads,W_Nabellen incomplete dossiers,300,16,100.0,12.2,7.97,2.995,0.249,False,impossible
+A_PARTLYSUBMITTED,W_Completeren aanvraag,300,18,100.0,19.6,5.0,2.322,0.25,False,impossible
+W_Valideren aanvraag,O_SENT,300,1,33.3,5.3,4.338,2.117,0.25,False,impossible
+A_SUBMITTED,A_PARTLYSUBMITTED,300,78,100.0,24.7,4.032,2.011,0.25,True,learned_prefer
+O_SELECTED,W_Nabellen offertes,313,1,100.0,20.0,3.667,1.874,-0.038,True,learned_prefer
+W_Nabellen incomplete dossiers,O_SENT_BACK,300,2,49.8,11.8,3.491,1.804,0.25,True,learned_prefer
+W_Beoordelen fraude,W_Valideren aanvraag,300,14,100.0,28.0,3.483,1.8,0.25,True,learned_prefer
+O_SENT,W_Nabellen incomplete dossiers,300,1,100.0,25.0,3.0,1.585,-0.05,True,learned_prefer
+A_ACTIVATED,A_REGISTERED,302,0,100.0,0.0,3.0,1.585,0.248,True,learned_prefer
+A_REGISTERED,A_APPROVED,300,0,99.3,0.0,2.98,1.575,-0.05,True,learned_prefer
+W_Nabellen offertes,W_Afhandelen leads,300,3,50.0,16.7,2.645,1.403,0.25,False,impossible
+O_SENT_BACK,W_Valideren aanvraag,300,2,100.0,50.0,1.8,0.848,-0.05,True,neutral
+W_Wijzigen contractgegevens,W_Valideren aanvraag,300,1,100.0,50.0,1.667,0.737,-0.05,True,neutral
+O_CREATED,W_Nabellen offertes,287,4,100.0,80.0,1.222,0.29,0.25,False,impossible
+W_Completeren aanvraag,O_SENT_BACK,0,1,0.0,1.9,0.058,-4.102,0.0,False,impossible
+W_Completeren aanvraag,A_PREACCEPTED,0,1,0.0,1.9,0.058,-4.102,0.0,False,impossible
+W_Completeren aanvraag,W_Afhandelen leads,0,2,0.0,3.8,0.035,-4.839,0.0,True,learned_avoid
+W_Afhandelen leads,A_ACCEPTED,0,6,0.0,4.6,0.034,-4.893,0.0,False,impossible
+W_Afhandelen leads,A_SUBMITTED,0,7,0.0,5.3,0.029,-5.099,0.0,False,impossible
+W_Completeren aanvraag,O_SELECTED,0,3,0.0,5.8,0.025,-5.324,0.0,True,learned_avoid
+W_Completeren aanvraag,A_CANCELLED,0,3,0.0,5.8,0.025,-5.324,0.0,True,learned_avoid
+W_Completeren aanvraag,A_DECLINED,0,3,0.0,5.8,0.025,-5.324,0.0,True,learned_avoid
+A_REGISTERED,W_Nabellen incomplete dossiers,2,0,0.7,0.0,0.025,-5.334,-0.05,True,learned_avoid
+W_Afhandelen leads,A_CANCELLED,0,9,0.0,6.9,0.023,-5.44,0.0,True,learned_avoid
+A_PARTLYSUBMITTED,A_PREACCEPTED,0,7,0.0,7.6,0.021,-5.607,0.0,True,learned_avoid
+W_Afhandelen leads,A_PARTLYSUBMITTED,0,11,0.0,8.4,0.019,-5.716,0.0,False,impossible
+W_Afhandelen leads,A_PREACCEPTED,0,13,0.0,9.9,0.016,-5.947,0.0,True,learned_avoid
+W_Completeren aanvraag,A_SUBMITTED,0,5,0.0,9.6,0.016,-5.976,0.0,False,impossible
+W_Completeren aanvraag,W_Completeren aanvraag,0,5,0.0,9.6,0.016,-5.976,0.0,True,learned_avoid
+W_Afhandelen leads,A_DECLINED,0,16,0.0,12.2,0.013,-6.237,0.0,True,learned_avoid
+W_Afhandelen leads,W_Afhandelen leads,0,17,0.0,13.0,0.013,-6.322,0.0,True,learned_avoid
+W_Afhandelen leads,W_Completeren aanvraag,0,18,0.0,13.7,0.012,-6.402,0.0,True,learned_avoid
+W_Afhandelen leads,W_Beoordelen fraude,0,18,0.0,13.7,0.012,-6.402,0.0,True,learned_avoid
+W_Completeren aanvraag,A_ACCEPTED,0,7,0.0,13.5,0.012,-6.424,0.0,True,learned_avoid
+W_Beoordelen fraude,W_Afhandelen leads,0,7,0.0,14.0,0.011,-6.48,0.0,True,learned_avoid
+W_Completeren aanvraag,W_Nabellen offertes,0,8,0.0,15.4,0.01,-6.604,0.0,True,learned_avoid
+W_Nabellen offertes,A_DECLINED,0,1,0.0,5.6,0.01,-6.606,0.0,True,learned_avoid
+W_Nabellen offertes,O_CREATED,0,1,0.0,5.6,0.01,-6.606,0.0,True,learned_avoid
+W_Nabellen offertes,A_PARTLYSUBMITTED,0,1,0.0,5.6,0.01,-6.606,0.0,False,impossible
+W_Nabellen offertes,A_FINALIZED,0,1,0.0,5.6,0.01,-6.606,0.0,False,impossible
+W_Nabellen offertes,O_SELECTED,0,1,0.0,5.6,0.01,-6.606,0.0,True,learned_avoid
+W_Nabellen offertes,O_SENT_BACK,0,1,0.0,5.6,0.01,-6.606,0.0,True,learned_avoid
+W_Nabellen offertes,W_Nabellen offertes,0,1,0.0,5.6,0.01,-6.606,0.0,True,learned_avoid
+W_Beoordelen fraude,W_Completeren aanvraag,0,8,0.0,16.0,0.01,-6.66,0.0,True,learned_avoid
+W_Nabellen incomplete dossiers,O_DECLINED,0,1,0.0,5.9,0.01,-6.69,0.0,True,learned_avoid
+W_Nabellen incomplete dossiers,A_SUBMITTED,0,1,0.0,5.9,0.01,-6.69,0.0,False,impossible
+W_Nabellen incomplete dossiers,O_ACCEPTED,0,1,0.0,5.9,0.01,-6.69,0.0,True,learned_avoid
+W_Nabellen incomplete dossiers,O_SELECTED,0,1,0.0,5.9,0.01,-6.69,0.0,True,learned_avoid
+W_Nabellen incomplete dossiers,W_Valideren aanvraag,0,1,0.0,5.9,0.01,-6.69,0.0,True,learned_avoid
+W_Completeren aanvraag,A_FINALIZED,0,9,0.0,17.3,0.009,-6.765,0.0,True,learned_avoid
+W_Beoordelen fraude,W_Beoordelen fraude,0,9,0.0,18.0,0.009,-6.821,0.0,True,learned_avoid
+A_PARTLYSUBMITTED,W_Beoordelen fraude,0,17,0.0,18.5,0.009,-6.829,0.0,True,learned_avoid
+A_SUBMITTED,A_DECLINED,0,71,0.0,22.5,0.007,-7.085,0.0,False,impossible
+W_Valideren aanvraag,W_Beoordelen fraude,0,1,0.0,5.3,0.007,-7.114,0.0,True,learned_avoid
+W_Valideren aanvraag,W_Completeren aanvraag,0,1,0.0,5.3,0.007,-7.114,0.0,False,impossible
+W_Valideren aanvraag,O_ACCEPTED,0,1,0.0,5.3,0.007,-7.114,0.0,True,learned_avoid
+W_Valideren aanvraag,W_Afhandelen leads,0,1,0.0,5.3,0.007,-7.114,0.0,False,impossible
+W_Valideren aanvraag,W_Valideren aanvraag,0,1,0.0,5.3,0.007,-7.114,0.0,True,learned_avoid
+W_Valideren aanvraag,A_PARTLYSUBMITTED,0,1,0.0,5.3,0.007,-7.114,0.0,False,impossible
+W_Valideren aanvraag,A_REGISTERED,0,1,0.0,5.3,0.007,-7.114,0.0,True,learned_avoid
+W_Valideren aanvraag,A_PREACCEPTED,0,1,0.0,5.3,0.007,-7.114,0.0,False,impossible
+W_Valideren aanvraag,O_DECLINED,0,1,0.0,5.3,0.007,-7.114,0.0,True,learned_avoid
+W_Valideren aanvraag,A_ACCEPTED,0,1,0.0,5.3,0.007,-7.114,0.0,False,impossible
+W_Valideren aanvraag,A_CANCELLED,0,1,0.0,5.3,0.007,-7.114,0.0,True,learned_avoid
+W_Valideren aanvraag,A_ACTIVATED,0,1,0.0,5.3,0.007,-7.114,0.0,True,learned_avoid
+A_SUBMITTED,W_Afhandelen leads,0,77,0.0,24.4,0.007,-7.201,0.0,False,impossible
+W_Beoordelen fraude,A_DECLINED,0,12,0.0,24.0,0.007,-7.217,0.0,True,learned_avoid
+O_CREATED,O_SENT,0,1,0.0,20.0,0.006,-7.293,0.0,True,learned_avoid
+A_PARTLYSUBMITTED,W_Afhandelen leads,0,24,0.0,26.1,0.006,-7.315,0.0,True,learned_avoid
+W_Nabellen offertes,O_SENT,0,2,0.0,11.1,0.006,-7.342,0.0,False,impossible
+W_Nabellen offertes,O_DECLINED,0,2,0.0,11.1,0.006,-7.342,0.0,True,learned_avoid
+A_SUBMITTED,A_PREACCEPTED,0,90,0.0,28.5,0.006,-7.425,0.0,False,impossible
+W_Nabellen incomplete dossiers,O_CREATED,0,2,0.0,11.8,0.006,-7.427,0.0,False,impossible
+W_Nabellen incomplete dossiers,A_APPROVED,0,2,0.0,11.8,0.006,-7.427,0.0,True,learned_avoid
+W_Nabellen incomplete dossiers,W_Wijzigen contractgegevens,0,2,0.0,11.8,0.006,-7.427,0.0,True,learned_avoid
+A_PARTLYSUBMITTED,A_DECLINED,0,26,0.0,28.3,0.006,-7.428,0.0,True,learned_avoid
+O_SENT,W_Nabellen offertes,0,1,0.0,25.0,0.005,-7.646,0.0,True,learned_avoid
+W_Valideren aanvraag,A_FINALIZED,0,2,0.0,10.5,0.004,-7.851,0.0,False,impossible
+W_Valideren aanvraag,A_APPROVED,0,2,0.0,10.5,0.004,-7.851,0.0,True,learned_avoid
+W_Valideren aanvraag,O_CANCELLED,0,2,0.0,10.5,0.004,-7.851,0.0,True,learned_avoid
+O_SELECTED,A_FINALIZED,0,2,0.0,40.0,0.004,-8.155,0.0,True,learned_avoid
+O_SELECTED,O_CREATED,0,2,0.0,40.0,0.004,-8.155,0.0,True,learned_avoid
+W_Nabellen offertes,A_SUBMITTED,0,4,0.0,22.2,0.003,-8.19,0.0,False,impossible
+W_Nabellen incomplete dossiers,A_DECLINED,0,4,0.0,23.5,0.003,-8.275,0.0,True,learned_avoid
+O_SENT,W_Completeren aanvraag,0,2,0.0,50.0,0.003,-8.383,0.0,True,learned_avoid
+O_SENT_BACK,W_Nabellen offertes,0,2,0.0,50.0,0.003,-8.383,0.0,False,impossible
+W_Wijzigen contractgegevens,W_Nabellen offertes,0,1,0.0,50.0,0.003,-8.494,0.0,True,learned_avoid
+A_ACTIVATED,O_ACCEPTED,0,1,0.0,100.0,0.002,-9.241,0.0,True,learned_avoid
+A_REGISTERED,O_ACCEPTED,0,1,0.0,100.0,0.002,-9.241,0.0,True,learned_avoid

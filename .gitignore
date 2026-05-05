@@ -1,0 +1,80 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Test / coverage ───────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── Datasets (large raw files — not tracked) ──────────────────────────────────
+datasets/
+
+# ── Output artefacts (generated — not tracked) ────────────────────────────────
+# Trained models, pickled twins, embeddings
+output/**/*.pkl
+output/**/*.zip
+output/**/*.model
+
+# Parquet data files
+output/**/*.parquet
+
+# Figures and visualisations
+output/**/*.png
+
+# Logs and metrics
+output/**/training_metrics.csv
+output/**/rl_model/
+
+# JSON artefacts (reward weights, validation results, session config)
+output/**/reward_weights.json
+output/**/validation_modeA.json
+output/**/session_config.json
+output/**/evaluation_*.json
+output/**/evaluation_*.csv
+output/**/evaluation_*.png
+
+# Top-level output figures and CSVs
+output/*.png
+output/*.csv
+
+# Keep these — human-readable outputs worth tracking
+# output/**/terminal_classification.json  ← intentionally NOT ignored
+# output/**/routing_recommendations.csv   ← intentionally NOT ignored
+# output/**/routing_decision_rules.csv    ← intentionally NOT ignored
+# output/**/routing_preferences.csv       ← intentionally NOT ignored
+# output/**/management_action_usage.csv   ← intentionally NOT ignored
+
+# Old output directory
+output_old/
+
+# ── Temporary / scratch scripts ───────────────────────────────────────────────
+_*.py
+_*.ipynb
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
