@@ -20,7 +20,8 @@ This module provides:
     build_rims_comparison_table() - Build comparison table
 
   compare_policies(evaluator, env, rl_model, n_episodes)
-    Runs RL + random baseline, returns a tidy comparison DataFrame with
+    Runs RL + Random/FIFO/Greedy/Empirical/Reward-Greedy baselines, returns a tidy
+    comparison DataFrame with
     mean ± 95% CI in seconds — matching the RIMS_DRL paper format exactly.
 
   build_comparison_table(our_rows, rims_paper_rows)
@@ -38,7 +39,7 @@ SimPy episode using actual timestamps:
   wait_time   = start_time[i] - end_time[i-1] (between events)
   processing = end_time - start_time    (per event)
 
-This gives cycle times on the same scale as RIMS_DRL ~900-1100s for BPI12W.
+This gives cycle times on the same scale as RIMS_DRL.
 
 Scale note
 ----------
@@ -334,6 +335,252 @@ def ci_half(arr: np.ndarray, confidence: float = 0.95) -> float:
     return float(t_star * np.std(arr, ddof=1) / np.sqrt(n))
 
 
+def _resolve_next_activity(env, routing_idx: int) -> str:
+    """Resolve routing index to next activity with a deterministic fallback."""
+    successors = getattr(env, "_successors", {}).get(getattr(env, "_current_activity", ""), [])
+    if 0 <= routing_idx < len(successors):
+        return str(successors[routing_idx])
+
+    trans = getattr(getattr(env, "twin", None), "transition_probs", {}).get(
+        getattr(env, "_current_activity", ""), {}
+    )
+    if trans:
+        return str(max(trans.items(), key=lambda kv: kv[1])[0])
+    return str(getattr(env, "_current_activity", ""))
+
+
+def _estimate_routing_reward(env, next_act: str) -> float:
+    """
+    One-step routing reward estimate mirroring ProcessEnv._compute_reward().
+    """
+    trace = list(getattr(env, "_trace", [])) + [next_act]
+    step_next = int(getattr(env, "_step", 0)) + 1
+    terminal = next_act in set(getattr(env, "_all_terminals", set()))
+    reward = -float(getattr(env, "w_step", 0.0))
+
+    if terminal:
+        if next_act in set(getattr(env, "_bad_terminals", set())):
+            return float(getattr(env, "w_bad_terminal", -1.0))
+        reward += float(getattr(env, "w_terminal", 0.0))
+        median_len = max(float(getattr(env, "_median_len", 1.0)), 1.0)
+        length_ratio = len(trace) / median_len
+        length_bonus = float(getattr(env, "w_length_bonus", 0.0)) * (
+            1.0 - abs(length_ratio - 1.0)
+        )
+        reward += max(0.0, length_bonus)
+        return float(reward)
+
+    if next_act not in getattr(env, "_trace", []):
+        reward += float(getattr(env, "w_progress", 0.0))
+
+    rework = len(trace) - len(set(trace))
+    baseline_loop = float(getattr(env, "_baseline_loop_rate", 0.0))
+    excess = max(0.0, rework / max(step_next, 1) - baseline_loop)
+    reward -= float(getattr(env, "w_loop", 0.0)) * excess
+    return float(reward)
+
+
+def _estimate_mgmt_delta(env, mgmt_idx: int, kpi_vec: np.ndarray) -> float:
+    """
+    One-step management reward estimate without mutating the real env/twin.
+    """
+    from kpi_actions import apply_management_action
+
+    state_copy = dict(getattr(env, "_episode_state", {}))
+    return float(apply_management_action(int(mgmt_idx), state_copy, None, kpi_vec))
+
+
+def _select_heuristic_action(env, mask: np.ndarray, rng: np.random.Generator, policy: str):
+    """
+    Select an action for heuristic baselines in ProcessEnv.
+
+    Supported policies:
+      - random: uniformly sample among valid routing/management actions
+      - fifo:   choose the first valid routing action + default mgmt action
+      - greedy_throughput: prioritise successors likely to reach good terminals
+      - empirical_markov: choose most likely next transition from learned log dynamics
+      - reward_greedy: one-step greedy over immediate reward estimate
+    """
+    import gymnasium as gym
+
+    is_multidiscrete = isinstance(env.action_space, gym.spaces.MultiDiscrete)
+    mask = np.asarray(mask, dtype=bool)
+
+    if is_multidiscrete:
+        max_succ = int(env.action_space.nvec[0])
+        routing_mask = mask[:max_succ]
+        mgmt_mask = mask[max_succ:]
+    else:
+        routing_mask = mask
+        mgmt_mask = np.array([], dtype=bool)
+
+    valid_routing = np.where(routing_mask)[0]
+    if len(valid_routing) == 0:
+        valid_routing = np.array([0], dtype=int)
+
+    if policy == "random":
+        routing_idx = int(rng.choice(valid_routing))
+    elif policy == "fifo":
+        routing_idx = int(valid_routing[0])
+    elif policy == "reward_greedy":
+        best_idx = int(valid_routing[0])
+        best_score = -np.inf
+        for idx in valid_routing:
+            idx_i = int(idx)
+            nxt = _resolve_next_activity(env, idx_i)
+            score = _estimate_routing_reward(env, nxt)
+            if score > best_score:
+                best_score = score
+                best_idx = idx_i
+        routing_idx = best_idx
+    elif policy == "empirical_markov":
+        curr = getattr(env, "_current_activity", "")
+        trans = getattr(getattr(env, "twin", None), "transition_probs", {}).get(curr, {})
+        best_idx = int(valid_routing[0])
+        best_score = -np.inf
+        trace = getattr(env, "_trace", [])
+        good_terms = set(getattr(env, "_good_terminals", set()))
+        bad_terms = set(getattr(env, "_bad_terminals", set()))
+        for idx in valid_routing:
+            idx_i = int(idx)
+            nxt = _resolve_next_activity(env, idx_i)
+            p = float(trans.get(nxt, 0.0))
+            score = p
+            if nxt in good_terms:
+                score += 0.2
+            if nxt in bad_terms:
+                score -= 0.8
+            if nxt in trace[-3:]:
+                score -= 0.1
+            if score > best_score:
+                best_score = score
+                best_idx = idx_i
+        routing_idx = best_idx
+    else:
+        # Greedy throughput heuristic:
+        # choose a valid successor with highest "good terminal proximity",
+        # while avoiding bad terminals and short loops.
+        successors = getattr(env, "_successors", {}).get(
+            getattr(env, "_current_activity", ""), []
+        )
+        trace = getattr(env, "_trace", [])
+        twin = getattr(env, "twin", None)
+        trans_map = getattr(twin, "transition_probs", {}) if twin is not None else {}
+        good_terms = set(getattr(env, "_good_terminals", set()))
+        bad_terms = set(getattr(env, "_bad_terminals", set()))
+        all_terms = set(getattr(env, "_all_terminals", good_terms | bad_terms))
+
+        best_idx = int(valid_routing[0])
+        best_score = -np.inf
+        for idx in valid_routing:
+            idx_i = int(idx)
+            if idx_i >= len(successors):
+                continue
+            nxt = successors[idx_i]
+            nxt_trans = trans_map.get(nxt, {})
+            terminal_prox = float(sum(
+                p for act, p in nxt_trans.items() if act in all_terms
+            ))
+
+            score = terminal_prox
+            if nxt in good_terms:
+                score += 1.0
+            if nxt in bad_terms:
+                score -= 2.0
+            if nxt in trace[-3:]:
+                score -= 0.3
+            if nxt not in trace:
+                score += 0.1
+            score -= 0.02 * len(nxt_trans)
+
+            if score > best_score:
+                best_score = score
+                best_idx = idx_i
+
+        routing_idx = int(best_idx)
+
+    if not is_multidiscrete:
+        return int(routing_idx)
+
+    valid_mgmt = np.where(mgmt_mask)[0]
+    if len(valid_mgmt) == 0:
+        valid_mgmt = np.array([0], dtype=int)
+
+    if policy == "random":
+        mgmt_idx = int(rng.choice(valid_mgmt))
+    elif policy == "empirical_markov":
+        # Historical routing imitation baseline keeps management conservative.
+        mgmt_idx = 0 if 0 in {int(i) for i in valid_mgmt} else int(valid_mgmt[0])
+    elif policy == "reward_greedy":
+        kpi_vec = (
+            env._build_kpi_vec()
+            if hasattr(env, "_build_kpi_vec")
+            else np.zeros(7, dtype=np.float32)
+        )
+        best_m = int(valid_mgmt[0])
+        best_s = -np.inf
+        for m in valid_mgmt:
+            m_i = int(m)
+            s = _estimate_mgmt_delta(env, m_i, kpi_vec)
+            if s > best_s:
+                best_s = s
+                best_m = m_i
+        mgmt_idx = best_m
+    elif policy == "greedy_throughput":
+        # Prefer interventions that usually reduce queueing/rework quickly.
+        preferred = (
+            "skip_optional_subprocess",
+            "prioritize_urgent_case",
+            "rebalance_overloaded_queue",
+            "outsource_to_volunteer_pool",
+            "reroute_from_overloaded_employee",
+            "adjust_staffing_by_case_volume",
+            "add_temporary_staff",
+            "enable_cross_trained_pool",
+            "assign_to_primary_team",
+        )
+        try:
+            from kpi_actions import MANAGEMENT_ACTIONS
+            name_to_idx = {a.name: a.index for a in MANAGEMENT_ACTIONS}
+        except Exception:
+            name_to_idx = {}
+
+        valid_set = {int(i) for i in valid_mgmt}
+        mgmt_idx = None
+        for name in preferred:
+            idx = name_to_idx.get(name)
+            if idx is not None and idx in valid_set:
+                mgmt_idx = int(idx)
+                break
+        if mgmt_idx is None:
+            mgmt_idx = int(valid_mgmt[0])
+    else:
+        # FIFO baseline uses default management action when valid.
+        mgmt_idx = 0 if 0 in {int(i) for i in valid_mgmt} else int(valid_mgmt[0])
+
+    if policy == "reward_greedy":
+        kpi_vec = (
+            env._build_kpi_vec()
+            if hasattr(env, "_build_kpi_vec")
+            else np.zeros(7, dtype=np.float32)
+        )
+        best_pair = (int(routing_idx), int(mgmt_idx))
+        best_score = -np.inf
+        for r in valid_routing:
+            r_i = int(r)
+            nxt = _resolve_next_activity(env, r_i)
+            routing_score = _estimate_routing_reward(env, nxt)
+            for m in valid_mgmt:
+                m_i = int(m)
+                score = routing_score + _estimate_mgmt_delta(env, m_i, kpi_vec)
+                if score > best_score:
+                    best_score = score
+                    best_pair = (r_i, m_i)
+        routing_idx, mgmt_idx = best_pair
+
+    return np.array([int(routing_idx), int(mgmt_idx)], dtype=np.int64)
+
+
 # ---------------------------------------------------------------------------
 # Core evaluator
 # ---------------------------------------------------------------------------
@@ -353,9 +600,8 @@ class PolicyEvaluator:
       3. Apply a KPI multiplier derived from the episode's mean delay/rework
          signals so a better policy produces shorter cycle times.
 
-    This gives cycle times on the same scale as the real log (~900–1100 s for
-    BPI12W without calendars) rather than the inflated values produced by
-    summing per-activity durations over 80 RL steps.
+    This gives cycle times on the same scale as the real log rather than the
+    inflated values produced by summing per-activity durations over 80 RL steps.
     """
 
     # KPI multiplier bounds
@@ -464,7 +710,9 @@ class PolicyEvaluator:
 
         Args:
             env:        ProcessEnv instance.
-            policy:     Trained MaskablePPO model, or None for random baseline.
+            policy:     Trained MaskablePPO model, or one of:
+                        None / "random" / "fifo" / "greedy_throughput" /
+                        "empirical_markov" / "reward_greedy".
             n_episodes: Number of episodes.
             label:      Name for this policy in output tables.
 
@@ -475,32 +723,79 @@ class PolicyEvaluator:
               action_counts (Counter of action names)
         """
         from collections import Counter
+        import gymnasium as gym
+
         cycle_times_s: list[float] = []
         rewards:       list[float] = []
+        ep_lengths:    list[int] = []
         terminal_count = 0
+        good_terminal_count = 0
+        bad_terminal_count = 0
+        truncated_count = 0
         all_kpis:      list[dict]  = []
         action_counts  = Counter()
+        is_multidiscrete = isinstance(env.action_space, gym.spaces.MultiDiscrete)
+
+        policy_key = None
+        if policy is None:
+            policy_key = "random"
+        elif isinstance(policy, str):
+            p = policy.strip().lower().replace("-", "_").replace(" ", "_")
+            aliases = {
+                "rand": "random",
+                "random_policy": "random",
+                "first_valid": "fifo",
+                "greedy": "greedy_throughput",
+                "greedythroughput": "greedy_throughput",
+                "markov": "empirical_markov",
+                "empirical": "empirical_markov",
+                "log_policy": "empirical_markov",
+                "rewardgreedy": "reward_greedy",
+                "reward_greedy_policy": "reward_greedy",
+            }
+            policy_key = aliases.get(p, p)
 
         for _ in range(n_episodes):
             obs, _ = env.reset()
             done = truncated = False
             ep_reward = 0.0
+            ep_len = 0
             ep_kpis: list[dict] = []
+            info = {}
 
             while not (done or truncated):
                 mask = env.action_masks()
-                if policy is None:
-                    action = int(self._rng.choice(np.where(mask)[0]))
+                if policy_key in {"random", "fifo", "greedy_throughput", "empirical_markov", "reward_greedy"}:
+                    action = _select_heuristic_action(env, mask, self._rng, policy_key)
                 else:
                     action, _ = policy.predict(obs, action_masks=mask, deterministic=True)
-                    action = int(action)
+                    if is_multidiscrete:
+                        action = np.asarray(action).reshape(-1)
+                        if action.size < 2:
+                            action = np.array([int(action[0]), 0], dtype=np.int64)
+                        else:
+                            action = np.array([int(action[0]), int(action[1])], dtype=np.int64)
+                    else:
+                        action = int(action)
                 obs, reward, done, truncated, info = env.step(action)
                 ep_reward += float(reward)
+                ep_len += 1
                 ep_kpis.append(info.get("kpi", {}))
-                action_counts[str(action)] += 1
+                if is_multidiscrete:
+                    action_counts[info.get("mgmt_action_name", str(int(action[1])))] += 1
+                else:
+                    action_counts[str(action)] += 1
 
+            ep_lengths.append(ep_len)
             if done:
                 terminal_count += 1
+                final_kpi = info.get("kpi", {})
+                if int(final_kpi.get("is_good", 0)) == 1:
+                    good_terminal_count += 1
+                else:
+                    bad_terminal_count += 1
+            if truncated:
+                truncated_count += 1
 
             ct_s = self._simulate_case_duration_s(terminated=bool(done))
             ct_s *= self._kpi_multiplier(ep_kpis)
@@ -509,15 +804,23 @@ class PolicyEvaluator:
             all_kpis.extend(ep_kpis)
 
         ct_arr = np.array(cycle_times_s)
+        rew_arr = np.array(rewards) if rewards else np.array([0.0])
         return {
             "label":            label,
             "cycle_times_s":    cycle_times_s,
             "cycle_times_days": [t / 86_400 for t in cycle_times_s],
             "terminal_rate":    terminal_count / n_episodes,
+            "good_terminal_rate": good_terminal_count / n_episodes,
+            "bad_terminal_rate": bad_terminal_count / n_episodes,
+            "truncated_rate":     truncated_count / n_episodes,
             "mean_reward":      float(np.mean(rewards)),
+            "reward_p10":       float(np.percentile(rew_arr, 10)),
+            "reward_p50":       float(np.percentile(rew_arr, 50)),
+            "reward_p90":       float(np.percentile(rew_arr, 90)),
             "mean_delay":       float(np.mean([k.get("delay_proxy",  0.0) for k in all_kpis])) if all_kpis else 0.0,
             "mean_rework":      float(np.mean([k.get("rework_norm",  0.0) for k in all_kpis])) if all_kpis else 0.0,
             "mean_risk":        float(np.mean([k.get("risk_score",   0.0) for k in all_kpis])) if all_kpis else 0.0,
+            "mean_steps":       float(np.mean(ep_lengths)) if ep_lengths else 0.0,
             "action_counts":    action_counts,
             # Summary stats
             "mean_ct_s":        float(np.mean(ct_arr)),
@@ -538,7 +841,12 @@ class PolicyEvaluator:
             "p90_ct_s":      round(r["p90_ct_s"],     1),
             "mean_ct_days":  round(r["mean_ct_s"] / 86_400, 4),
             "terminal_rate": round(r["terminal_rate"], 3),
+            "good_term_rate": round(r.get("good_terminal_rate", 0.0), 3),
+            "bad_term_rate":  round(r.get("bad_terminal_rate", 0.0), 3),
+            "truncated_rate": round(r.get("truncated_rate", 0.0), 3),
+            "mean_steps":    round(r.get("mean_steps", 0.0), 2),
             "mean_reward":   round(r["mean_reward"],   3),
+            "reward_p50":    round(r.get("reward_p50", 0.0), 3),
             "mean_delay":    round(r["mean_delay"],    3),
             "mean_rework":   round(r["mean_rework"],   3),
             "mean_risk":     round(r["mean_risk"],     3),
@@ -556,7 +864,14 @@ def compare_policies(
     n_episodes: int = 200,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
-    Run RL + random baseline and return a comparison DataFrame.
+    Run RL + algorithmic baselines and return a comparison DataFrame.
+
+    Baselines included by default:
+      - Random
+      - FIFO
+      - Greedy Throughput
+      - Empirical Markov
+      - Reward Greedy (1-step)
 
     Returns:
         (summary_df, rl_result, random_result)
@@ -564,12 +879,27 @@ def compare_policies(
             p90_ct_s, mean_ct_days, terminal_rate, mean_reward, mean_delay,
             mean_rework, mean_risk
     """
-    rl_result     = evaluator.run(env, rl_model, n_episodes, label="Our RL")
-    random_result = evaluator.run(env, None,     n_episodes, label="Random")
+    rl_result = evaluator.run(env, rl_model, n_episodes, label="Our RL")
+    random_result = evaluator.run(env, "random", n_episodes, label="Random")
+    fifo_result = evaluator.run(env, "fifo", n_episodes, label="FIFO")
+    greedy_result = evaluator.run(
+        env, "greedy_throughput", n_episodes, label="Greedy Throughput"
+    )
+    empirical_result = evaluator.run(
+        env, "empirical_markov", n_episodes, label="Empirical Markov"
+    )
+    reward_greedy_result = evaluator.run(
+        env, "reward_greedy", n_episodes, label="Reward Greedy"
+    )
 
-    rl_df     = evaluator.summarise(rl_result)
-    random_df = evaluator.summarise(random_result)
-    df = pd.concat([rl_df, random_df], ignore_index=True)
+    df = pd.concat([
+        evaluator.summarise(rl_result),
+        evaluator.summarise(random_result),
+        evaluator.summarise(fifo_result),
+        evaluator.summarise(greedy_result),
+        evaluator.summarise(empirical_result),
+        evaluator.summarise(reward_greedy_result),
+    ], ignore_index=True)
     return df, rl_result, random_result
 
 
@@ -780,8 +1110,7 @@ class BatchEpisodeEvaluator:
     - 100 independent simulation runs for statistical stability
     - Mean CT per run → confidence interval via t-distribution
 
-    This produces cycle times on the same scale as RIMS_DRL's paper numbers
-    (~900–960 s for BPI12W without calendars).
+    This produces cycle times on the same scale as RIMS_DRL's paper numbers.
 
     Baselines implemented:
       - RANDOM: randomly assign an available qualified resource to a pending task

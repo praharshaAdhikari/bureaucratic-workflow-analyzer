@@ -10,3 +10,5 @@ seaborn>=0.12
 stable-baselines3>=2.2
 sb3-contrib>=2.2
 gymnasium>=0.29
+nbformat>=5.9
+nbconvert>=7.0

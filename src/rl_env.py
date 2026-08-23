@@ -44,11 +44,13 @@ Action masks (for MaskablePPO):
   Management action 0 (default) is always unmasked.
 
 Reward: shaped to minimise trace length while reaching terminal.
-  +w_terminal   on reaching a terminal activity
-  -w_loop       each time the same activity repeats (excess loops)
-  +w_progress   each step that moves toward terminal (terminal_proximity increases)
-  -w_step       small per-step cost to incentivise efficiency
-  ±mgmt_delta   shaped reward from the management action (from kpi_actions.py)
+  +w_terminal      on reaching a good terminal activity
+  +w_length_bonus  shaped bonus peaking when episode length == empirical median
+  -w_loop          each time the same activity repeats (excess loops)
+  +w_progress      each step that moves toward terminal (terminal_proximity increases)
+  -w_step          per-step cost to incentivise efficiency (0.1, raised from 0.05)
+  ±mgmt_delta      shaped reward from the management action (from kpi_actions.py)
+  w_bad_terminal   hard fixed penalty for bad terminal (not additive with w_terminal)
 """
 
 import numpy as np
@@ -100,6 +102,7 @@ class ProcessEnv(gym.Env):
         max_steps: int = 150,
         seed: int = 42,
         bad_terminals: Optional[set] = None,
+        good_terminals: Optional[set] = None,
     ):
         super().__init__()
         self.twin       = twin
@@ -124,11 +127,17 @@ class ProcessEnv(gym.Env):
         }
 
         # ── Reward weights ─────────────────────────────────────────────────
-        self.w_terminal  = 0.0    # no bonus just for closing — outcome matters
-        self.w_declined  = -8.0   # strong penalty for bad terminal (declined/cancelled)
-        self.w_loop      = 1.0    # penalty per excess loop above baseline rate
-        self.w_progress  = 0.3    # bonus for advancing to a new activity
-        self.w_step      = 0.05   # small per-step cost
+        self.w_terminal      = 0.0    # no bonus just for closing — outcome matters
+        self.w_bad_terminal  = -30.0  # hard penalty for bad terminal (declined/cancelled)
+                                      # NOTE: bad terminals receive ONLY this value (no
+                                      # w_terminal bonus added), making the signal
+                                      # unambiguously negative regardless of w_terminal tuning.
+        self.w_loop          = 1.0    # penalty per excess loop above baseline rate
+        self.w_progress      = 0.3    # bonus for advancing to a new activity
+        self.w_step          = 0.05   # per-step cost (tunable via reward_tuning)
+        self.w_length_bonus  = 5.0    # max bonus awarded when episode length == median
+                                      # (Fix 2): shaped bonus that peaks at _median_len
+                                      # and decays linearly with |length - median|
 
         median_len  = max(kpi_baselines.get("median_trace_length", 20), 1)
         mean_rework = max(kpi_baselines.get("mean_rework", 1.0), 0.1)
@@ -147,38 +156,62 @@ class ProcessEnv(gym.Env):
             self._bad_terminals = classify_bad_terminals(twin.activities)
 
         # ── Good terminal inference ────────────────────────────────────────
-        # The twin's terminal_activities set is fitted from trace-ending statistics
-        # and may miss good terminals (e.g. A_APPROVED, A_FINALIZED, O_ACCEPTED)
-        # if they appear mid-trace in high-rework processes.
-        # We augment with keyword-based detection across ALL activities so the
-        # agent has reachable positive outcomes to learn toward.
+        # Priority order:
+        #   1. Caller passes good_terminals explicitly (highest priority)
+        #   2. Keyword + graph-structure inference (dynamic fallback)
         #
-        # Exclusion: activities that start with "W_" are work-queue/subprocess
-        # activities (BPIC2012/2015 convention) — never real terminal outcomes.
-        _GOOD_KEYWORDS = (
-            "accept", "approv", "final", "complet", "grant", "success",
-            "paid", "closed", "done", "finish", "confirm",
-        )
-        _BAD_KEYWORDS = (
-            "cancel", "declin", "refus", "reject", "denied", "withdraw",
-            "suspend", "abort", "fail",
-        )
-        _SUBPROCESS_PREFIXES = ("W_", "w_")  # work-queue activities, never terminals
+        # The recommended path is for the caller (notebook 04) to load
+        # good_terminals from terminal_classification.json (written by notebook 02
+        # using classify_good_terminals, which combines empirical trace-ending
+        # frequency with keyword filtering and W_-prefix exclusion).
+        # That is more reliable than any graph-based heuristic, especially for
+        # cyclic processes like BPIC2017 where every activity has outgoing edges.
+        if good_terminals is not None:
+            # Caller passed good_terminals explicitly — trust it, just exclude bads
+            self._good_terminals: set = set(good_terminals) - self._bad_terminals
+        else:
+            # ── Dynamic fallback ──────────────────────────────────────────
+            # Used when terminal_classification.json has no good_terminals key
+            # (old artefacts) or when ProcessEnv is constructed without one.
+            #
+            # Strategy:
+            #   A. Keyword scan over all non-W_ activities
+            #   B. Include twin.terminal_activities that pass two filters:
+            #      - Not a W_/w_ subprocess prefix (work-queue loops)
+            #      - Not a dominant self-loop (>50% self-transition)
+            #   Both sets are unioned; no mid-process filter is applied to
+            #   keyword matches because cyclic processes have no dead-end nodes.
+            _GOOD_KEYWORDS = (
+                "accept", "approv", "final", "complet", "grant", "success",
+                "paid", "closed", "done", "finish", "confirm",
+            )
+            _BAD_KEYWORDS = (
+                "cancel", "declin", "refus", "reject", "denied", "withdraw",
+                "suspend", "abort", "fail", "incomplet",
+            )
+            _SUBPROCESS_PREFIXES = ("W_", "w_")
 
-        inferred_good: set = set()
-        for act in twin.activities:
-            # Skip work-queue subprocess activities
-            if any(act.startswith(pfx) for pfx in _SUBPROCESS_PREFIXES):
-                continue
-            act_lower = act.lower()
-            is_bad  = any(kw in act_lower for kw in _BAD_KEYWORDS)
-            is_good = any(kw in act_lower for kw in _GOOD_KEYWORDS)
-            if is_good and not is_bad:
-                inferred_good.add(act)
+            inferred_good: set = set()
+            for act in twin.activities:
+                if any(act.startswith(pfx) for pfx in _SUBPROCESS_PREFIXES):
+                    continue
+                act_lower = act.lower()
+                if (any(kw in act_lower for kw in _GOOD_KEYWORDS)
+                        and not any(kw in act_lower for kw in _BAD_KEYWORDS)):
+                    inferred_good.add(act)
 
-        # Also treat twin.terminal_activities that aren't bad as good
-        twin_good = set(twin.terminal_activities) - self._bad_terminals
-        self._good_terminals: set = inferred_good | twin_good
+            def _is_subprocess_or_loop(act: str) -> bool:
+                """True for W_ prefix activities or dominant self-loops (>50%)."""
+                if any(act.startswith(pfx) for pfx in _SUBPROCESS_PREFIXES):
+                    return True
+                return twin.transition_probs.get(act, {}).get(act, 0.0) > 0.5
+
+            twin_good = {
+                act for act in (set(twin.terminal_activities) - self._bad_terminals)
+                if not _is_subprocess_or_loop(act)
+            }
+
+            self._good_terminals = inferred_good | twin_good
 
         # All terminals = bad + good (union of everything that ends an episode)
         self._all_terminals: set = self._bad_terminals | self._good_terminals
@@ -319,6 +352,21 @@ class ProcessEnv(gym.Env):
         reward = routing_reward + mgmt_reward
         obs    = self._get_obs()
 
+        delay_proxy = self._delay_norm()
+        rework_norm = self._rework_norm()
+        risk_high = bool(self._episode_state.get("_risk_high", False))
+        objection = bool(self._episode_state.get("_objection_active", False))
+        suspension = bool(self._episode_state.get("_suspension_active", False))
+        risk_score = float(np.clip(
+            0.45 * delay_proxy
+            + 0.45 * rework_norm
+            + (0.6 if risk_high else 0.0)
+            + (0.3 if objection else 0.0)
+            + (0.3 if suspension else 0.0),
+            0.0,
+            3.0,
+        ))
+
         info = {
             "current_activity":  self._current_activity,
             "trace_len":         len(self._trace),
@@ -327,15 +375,16 @@ class ProcessEnv(gym.Env):
             "mgmt_reward":       mgmt_reward,
             "routing_reward":    routing_reward,
             "kpi": {
-                "delay_proxy":   self._delay_norm(),
-                "rework_norm":   self._rework_norm(),
+                "delay_proxy":   delay_proxy,
+                "rework_norm":   rework_norm,
+                "risk_score":    risk_score,
                 "is_terminal":   int(terminal),
                 "is_good":       int(next_act in self._good_terminals),
                 "case_age_norm": self._step / self.max_steps,
                 "volume_pressure": self._volume_pressure,
-                "risk_high":     self._episode_state.get("_risk_high", False),
-                "objection":     self._episode_state.get("_objection_active", False),
-                "suspension":    self._episode_state.get("_suspension_active", False),
+                "risk_high":     risk_high,
+                "objection":     objection,
+                "suspension":    suspension,
             },
         }
         return obs, reward, bool(terminal), bool(truncated), info
@@ -371,12 +420,25 @@ class ProcessEnv(gym.Env):
         reward = -self.w_step  # per-step cost
 
         if terminal:
-            # All terminals get a small closure bonus
-            reward += self.w_terminal
-            # Additional penalty for bad outcomes (declined/cancelled)
             if activity in self._bad_terminals:
-                reward += self.w_declined  # negative, so net = w_terminal + w_declined
-            return float(reward)
+                # Bad terminal: hard fixed penalty — NO w_terminal bonus.
+                # This is intentionally separated from w_terminal so that
+                # reward_tuning cannot accidentally make bad terminals positive
+                # by raising w_terminal (the old bug: w_terminal=15 + w_declined=-8 = +7).
+                return float(self.w_bad_terminal)
+            else:
+                # Good terminal: closure bonus only for positive outcomes
+                reward += self.w_terminal
+
+                # Length bonus (Fix 2): reward finishing close to the empirical
+                # median trace length.  Peaks at w_length_bonus when
+                # len(trace) == _median_len, decays linearly to 0 at 2× median.
+                # Clamped to [0, w_length_bonus] so it never penalises short episodes.
+                length_ratio = len(self._trace) / max(self._median_len, 1)
+                length_bonus = self.w_length_bonus * (1.0 - abs(length_ratio - 1.0))
+                reward += max(0.0, length_bonus)
+
+                return float(reward)
 
         # Progress bonus: reward advancing to a new (non-repeated) activity
         if self._current_activity not in self._trace[:-1]:

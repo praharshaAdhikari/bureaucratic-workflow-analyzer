@@ -1,0 +1,7 @@
+mgmt_action,rl_rate,random_rate,ratio
+relax_rules_for_low_risk,0.7054,0.3189,2.21
+assign_to_primary_team,0.2822,0.3324,0.85
+adjust_staffing_by_case_volume,0.0104,0.0045,2.31
+merge_tasks_under_role,0.002,0.0042,0.48
+enable_cross_trained_pool,0.0,0.0032,0.0
+skip_optional_subprocess,0.0,0.3369,0.0

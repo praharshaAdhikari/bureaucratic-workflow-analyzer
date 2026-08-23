@@ -9,12 +9,13 @@ Supports both:
   - MultiDiscrete([max_succ, 15]) — routing + KPI management action space
 
 Terminal output (one line per interval, header every 20 lines):
-  step | eps | rew±std | len | term% | delay | rework | risk | H | fps
+  step | eps | rew±std | term% | good% | bad% | trunc% | H | fps
 
 CSV columns (superset — everything useful for post-hoc analysis):
   timestep, episodes,
-  ep_reward_mean, ep_reward_std, ep_len_mean,
-  delay_mean, rework_mean, risk_mean, terminal_rate,
+  ep_reward_mean, ep_reward_std, ep_reward_p10, ep_reward_p50, ep_reward_p90, ep_len_mean,
+  delay_mean, rework_mean, risk_mean,
+  terminal_rate, good_terminal_rate, bad_terminal_rate, truncated_rate,
   top_routing_action, routing_entropy,
   top_mgmt_action, mgmt_entropy,
   mgmt_<action_name>_rate  (one column per management action, if MultiDiscrete),
@@ -50,7 +51,8 @@ def _get_mgmt_actions():
 # ── Terminal column widths (keep total ≤ 110 chars) ───────────────────
 _HDR = (
     f"{'step':>8}  {'eps':>5}  {'rew':>8}  {'±':>6}  "
-    f"{'term':>5}  {'H':>5}  {'ev':>6}  {'fps':>5}"
+    f"{'term':>5}  {'good':>5}  {'bad':>5}  {'trnc':>5}  "
+    f"{'H':>5}  {'ev':>6}  {'fps':>5}"
 )
 _SEP = "─" * len(_HDR)
 _HEADER_EVERY = 20   # reprint header every N log lines
@@ -93,6 +95,9 @@ class TrainingLogger(BaseCallback):
         self._rework_vals:  list[float] = []
         self._risk_vals:    list[float] = []
         self._terminal_eps: list[int]   = []
+        self._good_terminal_eps: list[int] = []
+        self._bad_terminal_eps: list[int] = []
+        self._truncated_eps: list[int] = []
         # Routing actions (dim 0 for MultiDiscrete, or the single action for Discrete)
         self._routing_actions: list[int] = []
         # Management actions (dim 1 for MultiDiscrete; empty for Discrete)
@@ -136,8 +141,11 @@ class TrainingLogger(BaseCallback):
 
         fieldnames = [
             "timestep", "episodes",
-            "ep_reward_mean", "ep_reward_std", "ep_len_mean",
-            "delay_mean", "rework_mean", "risk_mean", "terminal_rate",
+            "ep_reward_mean", "ep_reward_std",
+            "ep_reward_p10", "ep_reward_p50", "ep_reward_p90",
+            "ep_len_mean",
+            "delay_mean", "rework_mean", "risk_mean",
+            "terminal_rate", "good_terminal_rate", "bad_terminal_rate", "truncated_rate",
             "top_action", "action_entropy",          # backward-compat aliases
             "top_routing_action", "routing_entropy",
             "top_mgmt_action", "mgmt_entropy",
@@ -191,7 +199,12 @@ class TrainingLogger(BaseCallback):
             if done:
                 self._ep_rewards.append(float(self._ep_reward_buf[i]))
                 self._ep_lengths.append(int(self._ep_len_buf[i]))
-                self._terminal_eps.append(int(kpi.get("is_terminal", 0)))
+                is_terminal = int(kpi.get("is_terminal", 0))
+                is_good = int(kpi.get("is_good", 0))
+                self._terminal_eps.append(is_terminal)
+                self._good_terminal_eps.append(1 if (is_terminal and is_good) else 0)
+                self._bad_terminal_eps.append(1 if (is_terminal and not is_good) else 0)
+                self._truncated_eps.append(1 if not is_terminal else 0)
                 self._ep_reward_buf[i] = 0.0
                 self._ep_len_buf[i]    = 0
                 self._total_episodes  += 1
@@ -218,11 +231,17 @@ class TrainingLogger(BaseCallback):
 
         rew_mean  = _mean(self._ep_rewards)
         rew_std   = _std(self._ep_rewards)
+        rew_p10   = float(np.percentile(self._ep_rewards, 10)) if self._ep_rewards else float("nan")
+        rew_p50   = float(np.percentile(self._ep_rewards, 50)) if self._ep_rewards else float("nan")
+        rew_p90   = float(np.percentile(self._ep_rewards, 90)) if self._ep_rewards else float("nan")
         len_mean  = _mean(self._ep_lengths)
         delay     = _mean(self._delay_vals)
         rework    = _mean(self._rework_vals)
         risk      = _mean(self._risk_vals)
         term_rate = _mean(self._terminal_eps)
+        good_rate = _mean(self._good_terminal_eps)
+        bad_rate  = _mean(self._bad_terminal_eps)
+        trunc_rate = _mean(self._truncated_eps)
 
         # ── Action distribution ────────────────────────────────────────
         def _action_stats(action_list: list[int], n_bins: int | None = None) -> tuple[str, float]:
@@ -276,11 +295,17 @@ class TrainingLogger(BaseCallback):
             "episodes":           self._total_episodes,
             "ep_reward_mean":     round(rew_mean,   3),
             "ep_reward_std":      round(rew_std,    3),
+            "ep_reward_p10":      round(rew_p10,    3) if not np.isnan(rew_p10) else "",
+            "ep_reward_p50":      round(rew_p50,    3) if not np.isnan(rew_p50) else "",
+            "ep_reward_p90":      round(rew_p90,    3) if not np.isnan(rew_p90) else "",
             "ep_len_mean":        round(len_mean,   1),
             "delay_mean":         round(delay,      3),
             "rework_mean":        round(rework,     3),
             "risk_mean":          round(risk,       3),
             "terminal_rate":      round(term_rate,  3),
+            "good_terminal_rate": round(good_rate,  3),
+            "bad_terminal_rate":  round(bad_rate,   3),
+            "truncated_rate":     round(trunc_rate, 3),
             # backward-compat aliases
             "top_action":         top_action,
             "action_entropy":     round(entropy,    3) if not np.isnan(entropy) else "",
@@ -324,6 +349,9 @@ class TrainingLogger(BaseCallback):
                 f"{rew_mean:>+8.2f}  "
                 f"{rew_std:>6.2f}  "
                 f"{term_rate:>4.0%}  "
+                f"{good_rate:>4.0%}  "
+                f"{bad_rate:>4.0%}  "
+                f"{trunc_rate:>4.0%}  "
                 f"{entropy:>5.2f}  "
                 f"{ev_str}  "
                 f"{fps:>5.0f}",
@@ -338,6 +366,9 @@ class TrainingLogger(BaseCallback):
         self._rework_vals.clear()
         self._risk_vals.clear()
         self._terminal_eps.clear()
+        self._good_terminal_eps.clear()
+        self._bad_terminal_eps.clear()
+        self._truncated_eps.clear()
         self._routing_actions.clear()
         self._mgmt_actions.clear()
 

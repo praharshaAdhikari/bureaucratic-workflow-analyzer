@@ -368,5 +368,12 @@
     "objection lodged against decision",
     "refusal after suspension",
     "set phase decision revoked"
+  ],
+  "good_terminals": [
+    "close case",
+    "enter date publication decision environmental permit",
+    "enter senddate decision environmental permit",
+    "register deadline",
+    "set phase: phase permitting irrevocable"
   ]
 }

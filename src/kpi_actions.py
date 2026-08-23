@@ -251,21 +251,27 @@ def _build_actions() -> list[ManagementAction]:
     ))
 
     # ── 7. skip_optional_subprocess ──────────────────────────────────────
+    # FIX 3: Changed validity logic — no longer requires _skip_optional flag
+    # (which was only set by relax_rules, creating a circular dependency).
+    # Now valid independently for low-risk cases, making it a standalone action.
     def _skip_valid(kpi: np.ndarray, state: dict) -> bool:
         risk_high = (
             _kpi(kpi, 0) + _kpi(kpi, 1) > RISK_HIGH_THRESH
             or state.get("_risk_high", False)
         )
-        return state.get("_skip_optional", False) and not risk_high
+        # Valid for low-risk cases only (no dependency on _skip_optional flag)
+        return not risk_high
 
     def _skip_apply(state: dict, twin) -> float:
         state["_delay_norm"] = max(0.0, state.get("_delay_norm", 0.0) - 0.2)
+        # Set the flag so other logic can see that skip was applied
+        state["_skip_optional"] = True
         return 0.0
 
     actions.append(ManagementAction(
         index=7,
         name="skip_optional_subprocess",
-        description="Valid only on optional-step signals for low-risk cases.",
+        description="Valid for low-risk cases (independent action, no longer requires relax_rules first).",
         is_valid=_skip_valid,
         apply=_skip_apply,
     ))

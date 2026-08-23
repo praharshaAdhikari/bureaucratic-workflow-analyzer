@@ -82,6 +82,10 @@ WEIGHT_GRID = {
     # w_risk → unused in C2 env (kept for legacy compat with old env)
     "w_risk":       [0.0, 0.5, 1.0],
     # w_throughput → w_step in C2 env (per-step cost)
+    # NOTE: the tuner may select a value that is too high for long-trace datasets
+    # (e.g. BPIC2017 median=35, w_throughput=0.2 → step cost=7.0 dominates terminal
+    # reward and the agent terminates in 1-2 steps).  The cap is enforced in
+    # tune_reward_weights() after selection: w_step ≤ w_terminal * 0.25 / median_len.
     "w_throughput": [0.02, 0.05, 0.1, 0.2],
 }
 
@@ -111,7 +115,16 @@ def _run_rollouts(weights: dict, env, n_episodes: int, seed: int) -> dict:
         env.w_terminal = weights.get("w_completion", env.w_terminal)
         env.w_loop     = weights.get("w_rework",     env.w_loop)
         env.w_progress = weights.get("w_delay",      env.w_progress)
-        env.w_step     = weights.get("w_throughput",  env.w_step)
+        # Cap w_step so that even a max-length episode (max_steps) can still yield
+        # positive reward when reaching a good terminal.
+        # Invariant: w_step * max_steps < w_terminal
+        # → w_step_max = w_terminal * 0.5 / max_steps  (50% budget for step cost)
+        raw_w_step = weights.get("w_throughput", env.w_step)
+        max_steps  = max(getattr(env, "max_steps", 150), 1)
+        w_step_max = env.w_terminal * 0.5 / max_steps
+        env.w_step = min(raw_w_step, w_step_max)
+        # NOTE: w_bad_terminal is intentionally NOT tuned — it must stay negative
+        # regardless of w_completion tuning to avoid bad terminals becoming positive.
 
     # Detect whether the env uses MultiDiscrete (routing + management) or Discrete
     import gymnasium as gym
@@ -296,7 +309,24 @@ def tune_reward_weights(
         env.w_terminal = best_weights.get("w_completion", env.w_terminal)
         env.w_loop     = best_weights.get("w_rework",     env.w_loop)
         env.w_progress = best_weights.get("w_delay",      env.w_progress)
-        env.w_step     = best_weights.get("w_throughput",  env.w_step)
+
+        # Cap w_step so that even a max-length episode (max_steps) can still yield
+        # positive reward when reaching a good terminal.
+        # Invariant: w_step * max_steps < w_terminal
+        # → w_step_max = w_terminal * 0.5 / max_steps  (50% budget for step cost)
+        # This replaces the old median_len-based cap which failed for BPIC2017:
+        # w_step=0.2, max_steps=150 → step_cost=30 = entire w_terminal wiped out,
+        # causing the agent to loop indefinitely rather than seek a good terminal.
+        raw_w_step  = best_weights.get("w_throughput", env.w_step)
+        max_steps   = max(getattr(env, "max_steps", 150), 1)
+        w_step_max  = env.w_terminal * 0.5 / max_steps
+        env.w_step  = min(raw_w_step, w_step_max)
+        if env.w_step < raw_w_step and verbose:
+            print(f"  [reward_tuning] w_step capped: {raw_w_step:.4f} → {env.w_step:.4f} "
+                  f"(max_steps={max_steps}, cap=w_terminal*0.5/max_steps={w_step_max:.4f})")
+
+        # NOTE: w_bad_terminal is intentionally NOT tuned — it must stay negative
+        # regardless of w_completion tuning to avoid bad terminals becoming positive.
 
     if verbose:
         print(f"\nBest weights (score={best_score:+.4f}):")

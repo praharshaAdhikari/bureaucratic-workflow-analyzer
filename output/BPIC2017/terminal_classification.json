@@ -32,5 +32,10 @@
     "A_Denied",
     "O_Cancelled",
     "O_Refused"
+  ],
+  "good_terminals": [
+    "A_Accepted",
+    "A_Complete",
+    "O_Accepted"
   ]
 }

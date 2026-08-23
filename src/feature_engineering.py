@@ -479,3 +479,100 @@ def classify_bad_terminals(
             a for a in activities
             if any(k in a.lower() for k in fallback_keywords)
         }
+
+
+def classify_good_terminals(
+    df: pd.DataFrame,
+    bad_terminals: set[str],
+    min_end_rate: float = 0.05,
+    require_keyword: bool = False,
+    exclude_subprocess_prefixes: tuple = ("W_", "w_"),
+) -> set[str]:
+    """
+    Identify good terminal activities from the real event log.
+
+    Strategy — empirical end rate is the primary signal:
+      1. Compute the fraction of traces that end at each activity.
+      2. Keep activities that end >= ``min_end_rate`` of traces AND are not
+         in ``bad_terminals`` AND don't have a subprocess prefix.
+      3. If ``require_keyword=True``: additionally require a positive outcome
+         keyword. Use this only for processes where outcome names are semantic
+         (e.g. BPIC2012 "A_FINALIZED"). For administrative processes like
+         BPIC2015 (where traces end at "close case", "set phase: ..."), leave
+         this False (the default) so empirical rate alone decides.
+
+    Fallback: if the empirical filter yields nothing, fall back to keyword-only
+    matching so the env always has at least one good terminal.
+
+    Args:
+        df:                          Event log DataFrame with [case_id, activity, timestamp].
+        bad_terminals:               Set of bad terminal activity names.
+        min_end_rate:                Minimum fraction of traces ending at an activity.
+                                     Default 0.05 (5%).
+        require_keyword:             If True, also require a positive outcome keyword.
+                                     Default False — empirical rate is sufficient.
+        exclude_subprocess_prefixes: Activity name prefixes to always exclude.
+                                     Default (\"W_\", \"w_\").
+
+    Returns:
+        Set of activity names that are good terminals.
+
+    Example:
+        >>> good = classify_good_terminals(df_train, bad_terminals)
+        >>> # BPIC-2012: {'A_FINALIZED', 'A_APPROVED', ...}
+        >>> # BPIC-2017: {'A_Complete', 'O_Accepted', ...}
+        >>> # BPIC-2015: {'close case', 'set phase: phase permitting irrevocable', ...}
+    """
+    _GOOD_KEYWORDS = (
+        "accept", "approv", "final", "complet", "grant", "success",
+        "paid", "closed", "done", "finish", "confirm",
+    )
+    _BAD_KEYWORDS = (
+        "cancel", "declin", "refus", "reject", "denied", "withdraw",
+        "suspend", "abort", "fail", "incomplet",
+    )
+
+    df = _ensure_timestamps(df)
+
+    # Empirical: last activity per trace
+    last_activities = (
+        df.sort_values(["case_id", "timestamp"])
+        .groupby("case_id")["activity"]
+        .last()
+    )
+    n_traces = len(last_activities)
+    end_rates = last_activities.value_counts() / n_traces
+
+    def _passes_filters(act: str, rate: float) -> bool:
+        if rate < min_end_rate:
+            return False
+        if act in bad_terminals:
+            return False
+        if any(act.startswith(pfx) for pfx in exclude_subprocess_prefixes):
+            return False
+        if require_keyword:
+            act_lower = act.lower()
+            has_good = any(kw in act_lower for kw in _GOOD_KEYWORDS)
+            has_bad  = any(kw in act_lower for kw in _BAD_KEYWORDS)
+            if not has_good or has_bad:
+                return False
+        return True
+
+    good = {act for act, rate in end_rates.items() if _passes_filters(act, rate)}
+
+    # Fallback: if nothing passed the empirical filter, use keyword-only
+    # so the env always has at least one good terminal to learn toward.
+    if not good:
+        all_activities = sorted(df["activity"].unique().tolist())
+        for act in all_activities:
+            if act in bad_terminals:
+                continue
+            if any(act.startswith(pfx) for pfx in exclude_subprocess_prefixes):
+                continue
+            act_lower = act.lower()
+            has_good = any(kw in act_lower for kw in _GOOD_KEYWORDS)
+            has_bad  = any(kw in act_lower for kw in _BAD_KEYWORDS)
+            if has_good and not has_bad:
+                good.add(act)
+
+    return good
