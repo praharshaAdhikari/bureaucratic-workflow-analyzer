@@ -1,0 +1,4 @@
+dataset,ablation_clean,cycle_responds,best_policy,best_margin_over_noop,reward_no-op,reward_prioritise,reward_escalate,reward_selective,cycle_no-op,cycle_prioritise,cycle_escalate,cycle_selective
+BPIC2012,True,True,prioritise,0.1116,6.571,6.682,4.396,4.449,2.872,2.806,2.806,2.67
+BPIC2015,True,True,prioritise,0.0277,11.518,11.546,8.272,11.49,98.033,98.033,65.57,98.033
+BPIC2017,True,True,prioritise,0.1115,15.564,15.675,14.829,15.552,27.999,27.999,26.735,27.576

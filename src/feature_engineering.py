@@ -33,17 +33,8 @@ def _ensure_timestamps(df: pd.DataFrame) -> pd.DataFrame:
     Handles object, ArrowDtype(large_string), and already-parsed datetime columns.
     Called at the top of every function that does timestamp arithmetic.
     """
-    ts = df["timestamp"]
-    if pd.api.types.is_datetime64_any_dtype(ts):
-        # Already datetime — make sure it's tz-aware
-        if ts.dt.tz is None:
-            df = df.copy()
-            df["timestamp"] = ts.dt.tz_localize("UTC")
-        return df
-    # String or ArrowDtype string — parse
-    df = df.copy()
-    df["timestamp"] = pd.to_datetime(ts.astype(str), utc=True, errors="coerce")
-    return df
+    from timeutils import ensure_utc_timestamps
+    return ensure_utc_timestamps(df)
 
 def _is_numeric_column(series: pd.Series) -> bool:
     """True if >80% of non-null values are numeric strings (e.g. resource IDs)."""
@@ -481,98 +472,316 @@ def classify_bad_terminals(
         }
 
 
+class TerminalClassificationError(ValueError):
+    """Raised when no defensible terminal activities can be identified."""
+
+
+#: Percentile of the real steps-to-outcome distribution used as the earliest
+#: point at which an episode may reach an outcome.
+#:
+#: The 1st percentile, not the observed minimum. The minimum is one trace and
+#: is easily a truncated or malformed case; the percentile is robust to a
+#: handful of those. The cost is that the floor sits slightly above the
+#: genuine fastest case — BPIC2015 min 7 vs p1 11, BPIC2017 min 8 vs p1 13 —
+#: so a small number of real trajectories become unreachable. Set this to 0
+#: to use the observed minimum instead and accept the sensitivity.
+OUTCOME_FLOOR_PERCENTILE = 1
+
+
+def steps_to_outcome(df: pd.DataFrame, terminals: "set[str]") -> dict:
+    """
+    How many steps real cases take before they first reach an outcome.
+
+    Returns percentiles of that distribution plus the coverage count. The low
+    percentiles are the useful part: they say how quickly an outcome *can*
+    legitimately be reached, which is what stops a simulator from producing
+    a two-step permit approval on a process that takes forty-eight.
+
+    Motivation. Every edge in the fitted transition graph is real, but a
+    first-order Markov chain will happily compose them into paths no case ever
+    took. On BPIC2015 the shortest simulated route to "permit irrevocable" is
+    2 steps against a real minimum of 11, and the trained agent took it in
+    every episode — 100% good outcomes, reward variance 0.94, mean episode
+    length 2.3. Per-edge masking cannot see this; the path is only implausible
+    as a whole.
+    """
+    df = _ensure_timestamps(df)
+    df = df.sort_values(["case_id", "timestamp"], kind="stable")
+    step = df.groupby("case_id").cumcount() + 1
+
+    frame = pd.DataFrame({
+        "case_id":  df["case_id"].to_numpy(),
+        "activity": df["activity"].to_numpy(),
+        "step":     step.to_numpy(),
+    })
+    hits = frame[frame["activity"].isin(terminals)].groupby("case_id")["step"].min()
+
+    n_cases = df["case_id"].nunique()
+    if hits.empty:
+        return {"n_cases_with_outcome": 0, "coverage": 0.0}
+
+    pct = {f"p{p}": float(np.percentile(hits, p)) for p in (0, 1, 5, 10, 25, 50, 75)}
+    return {
+        **pct,
+        "min": float(hits.min()),
+        "n_cases_with_outcome": int(len(hits)),
+        "coverage": float(len(hits) / n_cases),
+    }
+
+
+def terminal_diagnostics(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Per-activity evidence about whether an activity marks the end of a case.
+
+    Columns
+    -------
+    occurrences    total events with this activity
+    case_coverage  share of cases that contain it at least once
+    rel_pos_mean   mean position within the trace, as a fraction (0=first, 1=last)
+    rel_pos_p25    25th percentile of that position — i.e. 75% of this
+                   activity's occurrences fall at or after this point
+    end_frac       share of cases whose *last* event is this activity
+
+    ``rel_pos_p25`` is the discriminating column.  ``end_frac`` alone is not
+    enough: in BPIC2012 four work-queue activities each end 10–21% of traces
+    while occurring overwhelmingly mid-case (rel_pos_p25 ~0.2), so treating
+    them as outcomes lets an episode "finish" a third of the way through.
+    """
+    df = _ensure_timestamps(df)
+    df = df.sort_values(["case_id", "timestamp"], kind="stable")
+
+    n_cases = df["case_id"].nunique()
+    position = df.groupby("case_id").cumcount() + 1
+    trace_len = df.groupby("case_id")["activity"].transform("size")
+
+    frame = pd.DataFrame({
+        "activity": df["activity"].to_numpy(),
+        "case_id":  df["case_id"].to_numpy(),
+        "rel_pos":  (position / trace_len).to_numpy(),
+    })
+    grouped = frame.groupby("activity")
+
+    diag = pd.DataFrame({
+        "occurrences":   grouped.size(),
+        "case_coverage": grouped["case_id"].nunique() / n_cases,
+        "rel_pos_mean":  grouped["rel_pos"].mean(),
+        "rel_pos_p25":   grouped["rel_pos"].quantile(0.25),
+    })
+    last_counts = df.groupby("case_id")["activity"].last().value_counts()
+    diag["end_frac"] = (last_counts / n_cases).reindex(diag.index).fillna(0.0)
+
+    return diag.sort_values("rel_pos_p25", ascending=False)
+
+
+def load_terminal_overrides(dataset: str, config_dir: "str | None" = None) -> dict:
+    """
+    Load hand-written terminal labels for a dataset, if any exist.
+
+    Looks for ``config/terminal_labels/<dataset>.json`` relative to the repo
+    root. Returns the ``labels`` mapping, or ``{}`` when there is no file.
+
+    Manual labels exist only where the automatic name-based classifier is
+    demonstrably unreliable; each entry carries a ``why`` string. See
+    ``config/terminal_labels/BPIC2015.json`` for the reasoning and its caveats.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(config_dir) if config_dir else Path(__file__).resolve().parent.parent / "config" / "terminal_labels"
+    path = root / f"{dataset}.json"
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh).get("labels", {})
+
+
+def outcome_base_rates(
+    df: pd.DataFrame,
+    good_terminals: "set[str]",
+    bad_terminals: "set[str]",
+) -> dict:
+    """
+    How real cases actually end: the share that succeed, and which specific
+    terminal activity each class ends at.
+
+    Used to let the environment draw the verdict rather than letting the agent
+    route to it. Measured on the first outcome each case reaches.
+
+    Why the agent must not choose. "Route to A_APPROVED" was simply another
+    action, always available and always worth the outcome bonus, so the trained
+    agent reached a good outcome 94.8% of the time on BPIC2012 against a real
+    rate of 17.7%. Conditioning the verdict on the current activity instead
+    only weakens the exploit — the agent can park at the activity with the
+    friendliest terminal distribution (75% good on BPIC2012, 100% on BPIC2015)
+    and wait. Drawing it once per episode is the only version it cannot steer.
+    """
+    df = _ensure_timestamps(df)
+    df = df.sort_values(["case_id", "timestamp"], kind="stable")
+
+    terminals = set(good_terminals) | set(bad_terminals)
+    hits = (
+        df[df["activity"].isin(terminals)]
+        .groupby("case_id")["activity"]
+        .first()
+    )
+    if hits.empty:
+        raise TerminalClassificationError(
+            "No case in the log reaches any labelled outcome, so no base rate "
+            "can be measured."
+        )
+
+    is_good = hits.isin(good_terminals)
+    counts = hits.value_counts()
+
+    def weights(subset: "set[str]") -> dict:
+        present = {a: int(counts[a]) for a in subset if a in counts}
+        total = sum(present.values())
+        return {a: n / total for a, n in present.items()} if total else {}
+
+    return {
+        "p_good": float(is_good.mean()),
+        "n_cases_with_outcome": int(len(hits)),
+        "coverage": float(len(hits) / df["case_id"].nunique()),
+        "good_terminal_weights": weights(set(good_terminals)),
+        "bad_terminal_weights": weights(set(bad_terminals)),
+    }
+
+
+def classify_terminals(
+    df: pd.DataFrame,
+    min_end_position: float = 0.80,
+    min_case_coverage: float = 0.02,
+    bad_threshold: float = 0.35,
+    overrides: "dict | None" = None,
+) -> dict:
+    """
+    Identify the activities that mark the end of a case, and split them into
+    good and bad outcomes.
+
+    An activity is an **outcome marker** when both hold:
+
+      * ``rel_pos_p25 >= min_end_position`` — whenever it happens, it happens
+        near the end of the case (75% of its occurrences fall in the last 20%
+        of the trace by default);
+      * ``case_coverage >= min_case_coverage`` — it is not vanishingly rare.
+
+    Markers are then split by :func:`classify_bad_terminals`, which scores the
+    activity *name* against a rejection anchor.  Anything not flagged negative
+    is treated as a good outcome.
+
+    Why position rather than trace-ending rate
+    ------------------------------------------
+    The previous rule kept activities that ended >= 5% of traces, excluded the
+    ``W_`` work-queue prefix, and — when that left nothing — silently fell back
+    to matching words like "accept" or "complete" anywhere in the activity
+    name.  On BPIC2012 and BPIC2017 the fallback always fired, producing
+    "good terminals" that end **zero** real cases: BPIC2012's A_PREACCEPTED
+    sits 17% of the way through a typical trace, A_ACCEPTED 28%.  An episode
+    that stopped there scored a success bonus for reaching the early middle.
+
+    Raises
+    ------
+    TerminalClassificationError
+        If no markers qualify, or if none of them are positive outcomes.
+        This is deliberate: an environment with no reachable good outcome
+        cannot be trained against, and silently inventing one hides that.
+
+    Returns
+    -------
+    dict with keys ``good_terminals``, ``bad_terminals``, ``diagnostics``
+    (the marker rows as a list of dicts) and ``thresholds``.
+    """
+    diag = terminal_diagnostics(df)
+
+    markers = diag[
+        (diag["rel_pos_p25"] >= min_end_position)
+        & (diag["case_coverage"] >= min_case_coverage)
+    ]
+    if markers.empty:
+        best = diag["rel_pos_p25"].max() if len(diag) else float("nan")
+        raise TerminalClassificationError(
+            f"No activity satisfies rel_pos_p25 >= {min_end_position} and "
+            f"case_coverage >= {min_case_coverage}. Best rel_pos_p25 observed "
+            f"was {best:.3f}. Lower min_end_position deliberately, or accept "
+            f"that this log has no activity that reliably ends a case."
+        )
+
+    marker_names = list(markers.index)
+    negative = classify_bad_terminals(marker_names, threshold=bad_threshold)
+
+    bad = set(marker_names) & set(negative)
+    good = set(marker_names) - bad
+    excluded: set[str] = set()
+
+    # Hand-written labels win over the name classifier. "exclude" drops the
+    # activity from the terminal set entirely — it occurs near the end but
+    # does not settle the outcome, so ending an episode there would say
+    # nothing about how the case turned out.
+    overrides = overrides or {}
+    unknown = sorted(set(overrides) - set(marker_names))
+    for activity, entry in overrides.items():
+        if activity not in marker_names:
+            continue
+        label = entry["label"] if isinstance(entry, dict) else entry
+        if label not in {"good", "bad", "exclude"}:
+            raise TerminalClassificationError(
+                f"Override for {activity!r} has label {label!r}; "
+                f"expected 'good', 'bad' or 'exclude'."
+            )
+        good.discard(activity)
+        bad.discard(activity)
+        excluded.discard(activity)
+        {"good": good, "bad": bad, "exclude": excluded}[label].add(activity)
+
+    if not good:
+        raise TerminalClassificationError(
+            f"No positive outcome survives among the {len(marker_names)} "
+            f"markers. The agent would have no reachable good outcome. "
+            f"Markers: {marker_names}."
+        )
+
+    markers = markers.drop(index=sorted(excluded))
+
+    timing = steps_to_outcome(df, good | bad)
+    floor_key = f"p{OUTCOME_FLOOR_PERCENTILE}"
+    min_steps = int(timing.get(floor_key, 1))
+
+    # Base rates for the environment-decided verdict. The agent must not be
+    # able to choose whether a case succeeds: creditworthiness is a property
+    # of the applicant, not of which queue the case sits in. The environment
+    # draws the verdict once per episode from these empirical rates.
+    outcome_rates = outcome_base_rates(df, set(good), set(bad))
+
+    return {
+        "good_terminals": sorted(good),
+        "bad_terminals":  sorted(bad),
+        "excluded_markers": sorted(excluded),
+        "unknown_overrides": unknown,
+        "diagnostics":    markers.reset_index().to_dict(orient="records"),
+        "steps_to_outcome": timing,
+        "outcome_base_rates": outcome_rates,
+        # Earliest step at which the environment may honour an outcome.
+        "min_steps_to_outcome": max(1, min_steps),
+        "thresholds": {
+            "min_end_position":  min_end_position,
+            "min_case_coverage": min_case_coverage,
+            "bad_threshold":     bad_threshold,
+            "n_manual_overrides": len(overrides),
+            "outcome_floor_percentile": OUTCOME_FLOOR_PERCENTILE,
+        },
+    }
+
+
 def classify_good_terminals(
     df: pd.DataFrame,
-    bad_terminals: set[str],
-    min_end_rate: float = 0.05,
-    require_keyword: bool = False,
-    exclude_subprocess_prefixes: tuple = ("W_", "w_"),
+    bad_terminals: set[str] | None = None,
+    **kwargs,
 ) -> set[str]:
     """
-    Identify good terminal activities from the real event log.
+    Backwards-compatible wrapper returning only the good-outcome set.
 
-    Strategy — empirical end rate is the primary signal:
-      1. Compute the fraction of traces that end at each activity.
-      2. Keep activities that end >= ``min_end_rate`` of traces AND are not
-         in ``bad_terminals`` AND don't have a subprocess prefix.
-      3. If ``require_keyword=True``: additionally require a positive outcome
-         keyword. Use this only for processes where outcome names are semantic
-         (e.g. BPIC2012 "A_FINALIZED"). For administrative processes like
-         BPIC2015 (where traces end at "close case", "set phase: ..."), leave
-         this False (the default) so empirical rate alone decides.
-
-    Fallback: if the empirical filter yields nothing, fall back to keyword-only
-    matching so the env always has at least one good terminal.
-
-    Args:
-        df:                          Event log DataFrame with [case_id, activity, timestamp].
-        bad_terminals:               Set of bad terminal activity names.
-        min_end_rate:                Minimum fraction of traces ending at an activity.
-                                     Default 0.05 (5%).
-        require_keyword:             If True, also require a positive outcome keyword.
-                                     Default False — empirical rate is sufficient.
-        exclude_subprocess_prefixes: Activity name prefixes to always exclude.
-                                     Default (\"W_\", \"w_\").
-
-    Returns:
-        Set of activity names that are good terminals.
-
-    Example:
-        >>> good = classify_good_terminals(df_train, bad_terminals)
-        >>> # BPIC-2012: {'A_FINALIZED', 'A_APPROVED', ...}
-        >>> # BPIC-2017: {'A_Complete', 'O_Accepted', ...}
-        >>> # BPIC-2015: {'close case', 'set phase: phase permitting irrevocable', ...}
+    ``bad_terminals`` is accepted and ignored — :func:`classify_terminals`
+    derives both sets together so they cannot disagree. Prefer calling
+    :func:`classify_terminals` directly; it also returns the evidence.
     """
-    _GOOD_KEYWORDS = (
-        "accept", "approv", "final", "complet", "grant", "success",
-        "paid", "closed", "done", "finish", "confirm",
-    )
-    _BAD_KEYWORDS = (
-        "cancel", "declin", "refus", "reject", "denied", "withdraw",
-        "suspend", "abort", "fail", "incomplet",
-    )
-
-    df = _ensure_timestamps(df)
-
-    # Empirical: last activity per trace
-    last_activities = (
-        df.sort_values(["case_id", "timestamp"])
-        .groupby("case_id")["activity"]
-        .last()
-    )
-    n_traces = len(last_activities)
-    end_rates = last_activities.value_counts() / n_traces
-
-    def _passes_filters(act: str, rate: float) -> bool:
-        if rate < min_end_rate:
-            return False
-        if act in bad_terminals:
-            return False
-        if any(act.startswith(pfx) for pfx in exclude_subprocess_prefixes):
-            return False
-        if require_keyword:
-            act_lower = act.lower()
-            has_good = any(kw in act_lower for kw in _GOOD_KEYWORDS)
-            has_bad  = any(kw in act_lower for kw in _BAD_KEYWORDS)
-            if not has_good or has_bad:
-                return False
-        return True
-
-    good = {act for act, rate in end_rates.items() if _passes_filters(act, rate)}
-
-    # Fallback: if nothing passed the empirical filter, use keyword-only
-    # so the env always has at least one good terminal to learn toward.
-    if not good:
-        all_activities = sorted(df["activity"].unique().tolist())
-        for act in all_activities:
-            if act in bad_terminals:
-                continue
-            if any(act.startswith(pfx) for pfx in exclude_subprocess_prefixes):
-                continue
-            act_lower = act.lower()
-            has_good = any(kw in act_lower for kw in _GOOD_KEYWORDS)
-            has_bad  = any(kw in act_lower for kw in _BAD_KEYWORDS)
-            if has_good and not has_bad:
-                good.add(act)
-
-    return good
+    return set(classify_terminals(df, **kwargs)["good_terminals"])

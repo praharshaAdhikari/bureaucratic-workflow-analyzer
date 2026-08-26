@@ -64,6 +64,10 @@ def _make_mock_env():
         n_resources=5,
         embed_dim=32,
         bad_terminals=bad_terminals,
+        # These tests cover the reward given when the *agent* routes to a
+        # terminal. That is now the 'agent' ablation; the pipeline default
+        # has the environment draw the verdict instead.
+        verdict_mode="agent",
     )
     # Minimal episode state so _compute_reward can run
     env._trace = ["A_SUBMITTED", "A_PARTLYSUBMITTED"]

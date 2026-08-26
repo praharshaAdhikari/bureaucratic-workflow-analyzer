@@ -1,0 +1,14 @@
+mgmt_action,rl_rate,random_rate,ratio
+assign_to_primary_team,0.4025,0.2207,1.82
+prioritize_urgent_case,0.3042,0.1063,2.86
+trigger_high_cost_escalation,0.1422,0.0155,9.16
+reroute_from_overloaded_employee,0.1161,0.0676,1.72
+escalate_to_higher_authority,0.0267,0.1178,0.23
+enable_cross_trained_pool,0.0042,0.0724,0.06
+adjust_staffing_by_case_volume,0.003,0.0037,0.8
+merge_tasks_under_role,0.0011,0.0008,1.3
+defer_until_objections_resolved,0.0,0.1463,0.0
+rebalance_overloaded_queue,0.0,0.0688,0.0
+outsource_to_volunteer_pool,0.0,0.0002,0.0
+relax_rules_for_low_risk,0.0,0.0753,0.0
+skip_optional_subprocess,0.0,0.1046,0.0

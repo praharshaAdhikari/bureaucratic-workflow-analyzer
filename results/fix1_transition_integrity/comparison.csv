@@ -1,0 +1,4 @@
+dataset,events,cases,activities,nat_old,nat_new,real_edges,twin_edges,fabricated,fabricated_pct
+BPIC2012,262200,13087,24,286,0,125,125,0,0.0
+BPIC2015,262628,5649,356,0,0,9064,9064,0,0.0
+BPIC2017,1202267,31509,26,1177,0,178,178,0,0.0

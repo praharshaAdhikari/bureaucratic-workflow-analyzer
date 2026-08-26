@@ -1,0 +1,13 @@
+{
+  "w_terminal": 30.0,
+  "w_bad_terminal": -30.0,
+  "w_length_bonus": 5.0,
+  "progress_share": 0.0,
+  "step_share": 0.02,
+  "w_loop": 1.0,
+  "time_share": 0.25,
+  "intervention_cost_share": 1.0,
+  "effect_scale": 1.0,
+  "w_progress_abs": null,
+  "w_step_abs": null
+}

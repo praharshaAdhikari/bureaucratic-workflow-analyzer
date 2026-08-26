@@ -1,0 +1,150 @@
+{
+  "dataset": "BPIC2015",
+  "added": "2026-08-23",
+  "source": "Manual domain labelling of the 24 candidate outcome markers, checked against the log itself (see 'evidence_used' below). BPIC2015 is Dutch municipal building-permit handling under the Wabo / omgevingsvergunning regime.",
+
+  "why_manual": [
+    "The automatic name-based classifier scores an activity name against a rejection anchor phrase.",
+    "It recognised only 3 of the 24 BPIC2015 outcome markers as negative, missing obvious ones such as",
+    "'phase procedure aborted' and 'decision permanent suspension irrevocable', because the wording is",
+    "Dutch administrative English the sentence model has not seen. With almost every ending scored as",
+    "positive, a purely random policy reached a 'good' outcome in 96% of episodes and the outcome metric",
+    "carried no information. This file replaces that guess with an explicit, reviewable decision."
+  ],
+
+  "labelling_principle": [
+    "good    - the applicant's outcome is settled and positive: the permit exists and can no longer be challenged.",
+    "bad     - the applicant's outcome is settled and negative: no permit will follow.",
+    "exclude - the activity happens near the end but does not settle anything. Removed from the terminal",
+    "          set entirely rather than counted as a success."
+  ],
+
+  "evidence_used": [
+    "A label of 'bad' was only kept where the log shows the case does NOT recover. For each candidate we",
+    "measured how often a case that reaches it later reaches a settled-positive marker:",
+    "  objection lodged against decision ....... 79% later reach a positive settlement -> exclude, not an outcome",
+    "  appeal logded ........................... 69% -> exclude",
+    "  contested decision affected ............. 65% -> exclude",
+    "  set phase decision revoked .............. 48% -> exclude (a revoked decision is often re-issued)",
+    "  phase procedure aborted .................. 0% -> bad",
+    "  decision permanent suspension irrevocable  0% -> bad",
+    "  copy decision permanent suspension ....... 0% -> bad",
+    "An objection or an appeal is a negative *event* during handling, not a negative *outcome*. Treating",
+    "them as outcomes was our first attempt and the log contradicted it, so they were reclassified.",
+    "",
+    "'close case', 'phase archived case' and 'phase case handled' are excluded for the opposite reason:",
+    "they occur on granted and refused cases alike, so they record that handling stopped, not how it ended."
+  ],
+
+  "consequences": [
+    "5 terminals: 2 good, 3 bad.",
+    "43.1% of real cases reach one. The other 57% never record a settled outcome in this log.",
+    "Of the cases that do: 82.7% positive, 17.3% negative — plausible for building permits.",
+    "Median 48 steps to the first settled outcome, against a median trace length of 45."
+  ],
+
+  "caveat": "These are our readings of the activity names plus the recovery evidence above, not the judgement of a municipal case handler. The weakest point is coverage: for 57% of cases this log never records whether the applicant ended up with a permit, so BPIC2015 outcome results describe a minority of cases and must be reported that way.",
+
+  "labels": {
+    "set phase: phase permitting irrevocable": {
+      "label": "good",
+      "why": "The permit has become irrevocable — the objection and appeal windows have closed with the permit standing. The definitive positive settlement. Present in 35.6% of cases."
+    },
+    "phase decision irrevocable": {
+      "label": "good",
+      "why": "The same settlement recorded at the decision level: the decision can no longer be challenged. Present in 19.7% of cases."
+    },
+
+    "phase procedure aborted": {
+      "label": "bad",
+      "why": "The procedure was terminated without a decision. No case that reaches this later reaches a positive settlement (0 of 335)."
+    },
+    "decision permanent suspension irrevocable": {
+      "label": "bad",
+      "why": "The case was permanently suspended and that suspension is now final. No case recovers (0 of 146)."
+    },
+    "copy decision permanent suspension to stakeholders": {
+      "label": "bad",
+      "why": "Communication step on the permanent-suspension path above. No case recovers (0 of 119)."
+    },
+
+    "objection lodged against decision": {
+      "label": "exclude",
+      "why": "A bezwaar was filed. 79% of these cases still reach a positive settlement afterwards, so this is a negative event during handling, not a negative outcome."
+    },
+    "appeal logded": {
+      "label": "exclude",
+      "why": "A beroep was filed. 69% still settle positively afterwards. (Spelling as recorded in the log.)"
+    },
+    "contested decision affected": {
+      "label": "exclude",
+      "why": "The decision was challenged and altered. 65% still settle positively afterwards."
+    },
+    "set phase decision revoked": {
+      "label": "exclude",
+      "why": "The decision was withdrawn, but 48% of these cases go on to a positive settlement — a revoked decision is commonly replaced by a new one. Too ambiguous to score either way."
+    },
+
+    "close case": {
+      "label": "exclude",
+      "why": "Administrative closure. Occurs on granted and refused cases alike, so it records that handling stopped rather than how it ended. Strongest raw ending in the log (18.1% of traces) and therefore the most tempting wrong answer."
+    },
+    "phase archived case": {
+      "label": "exclude",
+      "why": "The file was archived. Same reasoning as 'close case' — outcome-neutral."
+    },
+    "phase case handled": {
+      "label": "exclude",
+      "why": "Marks that handling finished, without saying how. Outcome-neutral."
+    },
+
+    "enter senddate decision environmental permit": {
+      "label": "exclude",
+      "why": "Records that the decision was posted. The objection window opens here rather than closing, so nothing is settled. Present in 78.7% of cases — treating it as success is what made the metric uninformative."
+    },
+    "transcript decision environmental permit to stakeholders": {
+      "label": "exclude",
+      "why": "Distribution of the decision to interested parties. Communication, not conclusion."
+    },
+    "phase decision sent": {
+      "label": "exclude",
+      "why": "Phase marker for the same dispatch step."
+    },
+    "enter senddate decision": {
+      "label": "exclude",
+      "why": "Generic variant of the dispatch step."
+    },
+    "enter date publication decision environmental permit": {
+      "label": "exclude",
+      "why": "Publication date recorded. Publication starts the appeal clock; it does not end the case."
+    },
+    "generate publication document decision environmental permit": {
+      "label": "exclude",
+      "why": "Document preparation for that publication."
+    },
+    "read publication date field": {
+      "label": "exclude",
+      "why": "System read of the publication date. Administrative housekeeping."
+    },
+    "register deadline": {
+      "label": "exclude",
+      "why": "Registers a future deadline, so by definition the case is still running."
+    },
+    "date decision for inspection": {
+      "label": "exclude",
+      "why": "Sets the date the decision becomes available for inspection — a step in the publication sequence."
+    },
+    "set decision phase inspection of decision permitting": {
+      "label": "exclude",
+      "why": "Phase marker for the same inspection window."
+    },
+    "stop all running subcases 2b": {
+      "label": "exclude",
+      "why": "Closes open subcases. Housekeeping that accompanies a conclusion rather than being one, and it occurs on both positive and negative paths."
+    },
+    "continue or abort mutation BAG objects": {
+      "label": "exclude",
+      "why": "Updates the BAG address and buildings registry. A downstream registry action, unrelated to the applicant's outcome."
+    }
+  }
+}

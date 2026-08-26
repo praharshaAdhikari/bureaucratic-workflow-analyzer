@@ -33,6 +33,8 @@ import pandas as pd
 from typing import Optional
 from scipy.stats import wasserstein_distance, ks_2samp
 
+from timeutils import ensure_utc_timestamps
+
 from feature_engineering import (
     compute_transition_matrix,
     compute_duration_stats,
@@ -78,6 +80,20 @@ DEFAULT_THRESHOLDS = {
     # 0.05 means on average each resource's share of work is within 5 percentage points.
     # Values > 0.10 indicate the sim is assigning work to wrong resources.
     "resource_utilisation_mae":  0.05,
+
+    # |log(median sim cycle time / median real cycle time)|. 0 = same scale.
+    #
+    # This exists because every other duration metric here is scale-blind.
+    # case_duration_wasserstein divides each distribution by its own 99th
+    # percentile, and duration_distribution_ks filters both sides to gaps
+    # > 60s. A simulator whose cases take ten times too long scores exactly
+    # the same as a correct one on both. That is not hypothetical: the twin
+    # discarded every inter-event gap under a minute when fitting, producing
+    # cycle times 3-11x too long, and all seven original metrics passed
+    # comfortably throughout.
+    #
+    # 0.40 admits a median within roughly [0.67x, 1.49x] of the real one.
+    "cycle_time_scale_error":    0.40,
 }
 
 # Metrics where higher value = better (inverted threshold logic)
@@ -115,7 +131,7 @@ def case_duration_wasserstein(real_df: pd.DataFrame, sim_df: pd.DataFrame) -> fl
     """
     def real_case_durations_days(df):
         df = df.copy()
-        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(str), utc=True, errors="coerce")
+        df = ensure_utc_timestamps(df, copy=False)
         return df.groupby("case_id")["timestamp"].agg(
             lambda x: (x.max() - x.min()).total_seconds() / 86400
         ).clip(lower=0).values.astype(float)
@@ -124,7 +140,7 @@ def case_duration_wasserstein(real_df: pd.DataFrame, sim_df: pd.DataFrame) -> fl
         if "duration_s" in df.columns:
             return (df.groupby("case_id")["duration_s"].sum() / 86400).clip(lower=0).values.astype(float)
         df = df.copy()
-        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(str), utc=True, errors="coerce")
+        df = ensure_utc_timestamps(df, copy=False)
         return df.groupby("case_id")["timestamp"].agg(
             lambda x: (x.max() - x.min()).total_seconds() / 86400
         ).clip(lower=0).values.astype(float)
@@ -141,6 +157,34 @@ def case_duration_wasserstein(real_df: pd.DataFrame, sim_df: pd.DataFrame) -> fl
     sim_norm  = np.clip(sim_durs  / sim_p99,  0, 1)
 
     return float(wasserstein_distance(real_norm, sim_norm))
+
+
+def cycle_time_scale_error(real_df: pd.DataFrame, sim_df: pd.DataFrame) -> float:
+    """
+    Absolute log-ratio of median case duration, simulated against real.
+
+    Returns 0.0 when the two medians agree, 0.69 when the simulator is twice
+    as slow or twice as fast, and so on. Symmetric in over- and
+    under-estimation, and unlike every other duration metric in this module it
+    is *not* invariant to scale — which is the whole point of having it.
+    """
+    def case_days(df: pd.DataFrame) -> np.ndarray:
+        if "duration_s" in df.columns:
+            return (df.groupby("case_id")["duration_s"].sum() / 86400).clip(lower=0).values.astype(float)
+        d = ensure_utc_timestamps(df.copy(), copy=False)
+        return d.groupby("case_id")["timestamp"].agg(
+            lambda x: (x.max() - x.min()).total_seconds() / 86400
+        ).clip(lower=0).values.astype(float)
+
+    real_med = float(np.median(case_days(real_df)))
+    sim_med = float(np.median(case_days(sim_df)))
+
+    # A zero median on either side means the comparison is undefined; report
+    # the worst possible score rather than silently returning 0.
+    if real_med <= 0 or sim_med <= 0:
+        return float("inf")
+
+    return float(abs(np.log(sim_med / real_med)))
 
 
 def activity_freq_jsd(real_df: pd.DataFrame, sim_df: pd.DataFrame) -> float:
@@ -200,7 +244,7 @@ def duration_distribution_ks(real_df: pd.DataFrame, sim_df: pd.DataFrame) -> flo
     """
     # Real data: inter-event gaps
     real_df2 = real_df.copy().sort_values(["case_id", "timestamp"])
-    real_df2["timestamp"] = pd.to_datetime(real_df2["timestamp"].astype(str), utc=True, errors="coerce")
+    real_df2 = ensure_utc_timestamps(real_df2, copy=False)
     real_df2["next_ts"]    = real_df2.groupby("case_id")["timestamp"].shift(-1)
     real_df2["duration_s"] = (real_df2["next_ts"] - real_df2["timestamp"]).dt.total_seconds()
     real_df2 = real_df2[real_df2["duration_s"] > 60]  # only non-trivial gaps
@@ -210,7 +254,7 @@ def duration_distribution_ks(real_df: pd.DataFrame, sim_df: pd.DataFrame) -> flo
         sim_df2 = sim_df[sim_df["duration_s"] > 60].copy()
     else:
         sim_df2 = sim_df.copy().sort_values(["case_id", "timestamp"])
-        sim_df2["timestamp"] = pd.to_datetime(sim_df2["timestamp"].astype(str), utc=True, errors="coerce")
+        sim_df2 = ensure_utc_timestamps(sim_df2, copy=False)
         sim_df2["next_ts"]    = sim_df2.groupby("case_id")["timestamp"].shift(-1)
         sim_df2["duration_s"] = (sim_df2["next_ts"] - sim_df2["timestamp"]).dt.total_seconds()
         sim_df2 = sim_df2[sim_df2["duration_s"] > 60]
@@ -330,6 +374,7 @@ def validate(
         "duration_distribution_ks":  duration_distribution_ks,
         "variant_coverage":          variant_coverage,
         "resource_utilisation_mae":  resource_utilisation_mae,
+        "cycle_time_scale_error":    cycle_time_scale_error,
     }
 
     results = {}

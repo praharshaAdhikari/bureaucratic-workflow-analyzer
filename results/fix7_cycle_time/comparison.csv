@@ -1,0 +1,4 @@
+dataset,n_cases,real_median_days,sim_median_days,real_mean_days,sim_mean_days,median_ratio,mean_ratio,scale_error
+BPIC2012,800,1.7,1.91,9.63,10.23,1.125,1.063,0.118
+BPIC2015,800,60.75,63.49,93.69,98.41,1.045,1.05,0.044
+BPIC2017,800,18.95,17.14,22.05,21.74,0.905,0.986,0.1

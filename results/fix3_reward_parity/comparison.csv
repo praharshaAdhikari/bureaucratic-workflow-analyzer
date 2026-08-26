@@ -1,0 +1,4 @@
+dataset,max_steps,median_trace_length,w_terminal,w_bad_terminal,progress_share,step_share,w_loop,resolved_w_progress,resolved_w_step,shaping_fraction_of_reward,configs_match,old_train_good_outcome,old_eval_good_outcome,new_good_outcome_both
+BPIC2012,150,11.0,30.0,-30.0,0.0,0.02,1.0,0.0,0.0545,0.0196,True,34.95,4.95,34.95
+BPIC2015,180,45.0,30.0,-30.0,0.0,0.02,1.0,0.0,0.0133,0.0196,True,34.8,4.95,34.99
+BPIC2017,150,35.0,30.0,-30.0,0.0,0.02,1.0,0.0,0.0171,0.0196,True,34.98,4.95,34.98

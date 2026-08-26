@@ -1,0 +1,4 @@
+dataset,n_seeds,topk,mean_topk_jaccard,n_shared_transitions,sign_agreement,sign_supported,mean_pair_common,mean_spearman_rho,verdict
+BPIC2012,5,10,0.363,4,,False,6.5,,SEED ARTEFACT
+BPIC2015,5,10,0.005,0,,False,3.5,-0.127,SEED ARTEFACT
+BPIC2017,5,10,0.297,1,,False,3.2,,SEED ARTEFACT

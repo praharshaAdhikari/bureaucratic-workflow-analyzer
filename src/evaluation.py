@@ -590,109 +590,28 @@ class PolicyEvaluator:
     Evaluates a policy (RL model or heuristic) over N episodes and collects
     cycle times, terminal rates, rewards, and KPI signals.
 
-    Cycle-time estimation
-    ---------------------
-    For each episode we:
-      1. Run the policy to completion (done or truncated).
-      2. Call ``twin.simulate_case()`` to get a real SimPy-timed case duration.
-         The trace length is drawn from the appropriate half of the empirical
-         distribution (short for terminated, long for truncated).
-      3. Apply a KPI multiplier derived from the episode's mean delay/rework
-         signals so a better policy produces shorter cycle times.
+    Cycle time
+    ----------
+    Read from the episode the policy actually ran. ``ProcessEnv`` charges each
+    visited activity its fitted duration and reports the running total as
+    ``info["cycle_time_s"]``. Because the twin fits an activity's duration as
+    the gap to the following event, that total reconstructs first-to-last
+    elapsed time on the same scale the real log reports.
 
-    This gives cycle times on the same scale as the real log rather than the
-    inflated values produced by summing per-activity durations over 80 RL steps.
+    It did not always work this way. Cycle time used to be produced by
+    re-simulating a *fresh* case with ``twin.simulate_case()``, drawing its
+    length from the short half of the empirical distribution if the episode had
+    terminated and the long half if it had not, then scaling by a rework-based
+    multiplier clipped to [0.70, 1.50]. The policy's routing never entered the
+    calculation: the only things that reached it were a boolean (did the
+    episode end?) and mean rework. Any apparent cycle-time advantage was
+    therefore an artefact of the terminated/truncated split, and would have
+    looked like a result while measuring almost nothing.
     """
-
-    # KPI multiplier bounds
-    _MIN_MULT = 0.70   # best possible: 30% below baseline
-    _MAX_MULT = 1.50   # worst possible: 50% above baseline
 
     def __init__(self, twin, seed: int = 42) -> None:
         self.twin = twin
         self._rng = np.random.default_rng(seed)
-
-        # Split empirical trace lengths into short (≤ median) and long (> median)
-        emp = getattr(twin, "_trace_len_empirical", np.array([]))
-        if len(emp) > 0:
-            med = float(np.median(emp))
-            self._short = emp[emp <= med]
-            self._long  = emp[emp >  med]
-            if len(self._short) == 0:
-                self._short = emp
-            if len(self._long) == 0:
-                self._long = emp
-        else:
-            fb = np.array([int(twin.kpi_baselines.get("median_trace_length", 10))])
-            self._short = fb
-            self._long  = fb * 2
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _simulate_case_duration_s(self, terminated: bool) -> float:
-        """
-        Run twin.simulate_case() for one case and return wall-clock duration
-        in seconds.
-
-        The trace length is drawn from the short (terminated) or long
-        (truncated) half of the empirical distribution so the resulting
-        duration reflects the episode outcome.
-        """
-        pool = self._short if terminated else self._long
-        target_len = int(self._rng.choice(pool))
-
-        # Temporarily override the twin's trace-length sampler
-        orig_max = self.twin.max_trace_len
-        orig_emp = self.twin._trace_len_empirical
-        self.twin.max_trace_len = target_len
-        self.twin._trace_len_empirical = np.array([target_len])
-
-        try:
-            events = self.twin.simulate_case(
-                case_id=f"EVAL_{self._rng.integers(0, 1_000_000):06d}"
-            )
-        finally:
-            self.twin.max_trace_len = orig_max
-            self.twin._trace_len_empirical = orig_emp
-
-        if not events:
-            # Fallback: sample from the twin's fitted case-level log-normal
-            mu    = getattr(self.twin, "_case_duration_mu",    np.log(900.0 / 86_400))
-            sigma = getattr(self.twin, "_case_duration_sigma", 0.5)
-            ct_days = float(np.exp(self._rng.normal(mu, sigma)))
-            return float(np.clip(ct_days * 86_400, 60.0, 30 * 86_400))
-
-        # Use sum of duration_s (pure processing time per activity), NOT the
-        # sim_time span.  sim_time is cumulative wall-clock including resource
-        # queuing, which inflates durations by orders of magnitude when resources
-        # are contended.  RIMS_DRL's env.cycle_times is also pure processing time
-        # (sum of activity durations), so this is the correct apples-to-apples
-        # comparison.
-        duration_s = float(sum(e.get("duration_s", 0.0) for e in events))
-
-        # Floor at 10 s (degenerate case), ceiling at 30 days
-        return float(np.clip(duration_s, 10.0, 30 * 86_400))
-
-    def _kpi_multiplier(self, episode_kpis: list[dict]) -> float:
-        """
-        Translate mean episode KPI signals into a duration multiplier.
-
-        Only rework is used here — delay_proxy is already captured by the
-        trace-length selection in _simulate_case_duration_s() (terminated
-        episodes draw from the short half, truncated from the long half).
-        Using delay_proxy here would double-count it.
-
-        Calibration:
-          rework_norm = 1  → baseline rework level (multiplier = 1.0)
-          Each unit of rework above 1 adds 10% to CT.
-        """
-        if not episode_kpis:
-            return 1.0
-        mean_rework = float(np.mean([k.get("rework_norm", 0.0) for k in episode_kpis]))
-        rework_factor = 1.0 + 0.10 * max(0.0, mean_rework - 1.0)
-        return float(np.clip(rework_factor, self._MIN_MULT, self._MAX_MULT))
 
     # ------------------------------------------------------------------
     # Public API
@@ -797,9 +716,16 @@ class PolicyEvaluator:
             if truncated:
                 truncated_count += 1
 
-            ct_s = self._simulate_case_duration_s(terminated=bool(done))
-            ct_s *= self._kpi_multiplier(ep_kpis)
-            cycle_times_s.append(ct_s)
+            # Cycle time comes from the episode the policy actually ran: the
+            # environment charges each visited activity its fitted duration,
+            # so this is first-to-last elapsed time on the same scale as the
+            # real log, driven by the policy's own routing.
+            if "cycle_time_s" not in info:
+                raise RuntimeError(
+                    "env.step() did not report cycle_time_s. This ProcessEnv "
+                    "predates the cycle-time fix; rebuild it via env_factory."
+                )
+            cycle_times_s.append(float(info["cycle_time_s"]))
             rewards.append(ep_reward)
             all_kpis.extend(ep_kpis)
 

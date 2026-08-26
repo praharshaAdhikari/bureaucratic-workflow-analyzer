@@ -42,7 +42,7 @@ def collect_trajectories(
 
     Each episode dict contains:
         episode, steps, total_reward, n_steps, terminated,
-        final_activity, hit_bad_terminal, mgmt_action_counts,
+        final_activity, hit_bad_terminal, mgmt_action_counts, cycle_time_s,
         kpi_snapshots  — list of kpi_signals dicts per step (for decision tree)
     """
     import gymnasium as gym
@@ -76,8 +76,6 @@ def collect_trajectories(
                 routing_idx = int(action)
                 mgmt_idx    = 0
 
-            successors = env._successors.get(from_act, [])
-            to_act    = successors[routing_idx] if routing_idx < len(successors) else "UNKNOWN"
             mgmt_name = _mgmt_names.get(mgmt_idx, str(mgmt_idx))
 
             # Snapshot KPI signals before stepping (for decision tree)
@@ -86,12 +84,33 @@ def collect_trajectories(
             obs, reward, done, truncated, info = env.step(
                 np.array([routing_idx, mgmt_idx]) if _is_multidiscrete else routing_idx
             )
+
+            # Where the case actually went, read from the environment after the
+            # step — not reconstructed from the routing action.
+            #
+            # This used to be `successors[routing_idx]`, which is only the
+            # agent's *choice*. Under verdict_mode="environment" the agent
+            # never routes to a terminal: the environment draws one when the
+            # case concludes. So the final transition of every episode was
+            # recorded as the agent's non-terminal pick rather than what
+            # happened — 146 of 150 episodes on BPIC2015 and 149 of 150 on
+            # BPIC2017, about 2% of all recorded steps, and every routing
+            # preference, decision rule and recommendation inherited it. It
+            # also produced the stray "UNKNOWN" destination that surfaced as an
+            # impossible transition.
+            to_act = env._current_activity
+
             total_reward += reward
             mgmt_counts[mgmt_name] += 1
 
             steps.append({
                 "from_activity":    from_act,
                 "to_activity":      to_act,
+                "agent_routed_to":  (env._successors.get(from_act, [None] * (routing_idx + 1))[routing_idx]
+                                     if routing_idx < len(env._successors.get(from_act, []))
+                                     else None),
+                "env_concluded":    bool(done),
+                "env_no_move":      bool(info.get("env_no_move", False)),
                 "routing_action":   routing_idx,
                 "mgmt_action":      mgmt_idx,
                 "mgmt_action_name": mgmt_name,
@@ -115,6 +134,11 @@ def collect_trajectories(
             "final_activity":     env._current_activity,
             "hit_bad_terminal":   env._current_activity in env._bad_terminals,
             "mgmt_action_counts": dict(mgmt_counts),
+            # First-to-last elapsed time for this episode, the same quantity
+            # the real log's cycle time measures. Recorded here so that cycle
+            # time is read off the policy's own episode rather than
+            # re-simulated from a fresh case (see checks/fix7_cycle_time.py).
+            "cycle_time_s":       float(info.get("cycle_time_s", float("nan"))),
         })
 
     return trajectories
@@ -160,10 +184,22 @@ def routing_preference_table(
         avg_reward_rl, in_real_log, transition_type
     """
     def count_transitions(trajs):
+        """
+        Count only the transitions the agent actually chose.
+
+        Steps flagged ``env_concluded`` are the environment drawing a terminal
+        when the case ends — the agent never routes there, so including them
+        would populate this table with rows like
+        "PREFER W_Valideren aanvraag -> A_APPROVED", which reads as the agent
+        choosing to approve the application. It did not; the verdict is drawn
+        at reset and is policy-invariant by construction.
+        """
         counts: Counter = Counter()
         rewards: dict = defaultdict(list)
         for traj in trajs:
             for step in traj["steps"]:
+                if step.get("env_concluded") or step.get("env_no_move"):
+                    continue
                 key = (step["from_activity"], step["to_activity"])
                 counts[key] += 1
                 rewards[key].append(step["reward"])
@@ -172,13 +208,21 @@ def routing_preference_table(
     rl_counts, rl_rewards = count_transitions(rl_trajectories)
     rnd_counts, _         = count_transitions(random_trajectories)
 
-    # Build real-log transition set for cross-referencing
+    # Build real-log transition set for cross-referencing.
+    #
+    # The sort must be stable. BPIC2015 records 35,504 events that share a
+    # timestamp with another event in the same case, and pandas' default
+    # single-column sort is not stable, so it reshuffles those ties into
+    # orderings the log never had: 11,381 directly-follows edges instead of
+    # the true 9,064, with 1,582 genuine edges missing. Those missing edges
+    # were then reported as "impossible transitions" — a measurement artefact
+    # rather than a property of the simulator.
     real_transitions: set = set()
     if real_log_df is not None:
-        _df = real_log_df.copy()
-        _df["timestamp"] = pd.to_datetime(_df["timestamp"], utc=True, errors="coerce")
+        from timeutils import ensure_utc_timestamps, sort_events
+        _df = sort_events(ensure_utc_timestamps(real_log_df))
         for _, grp in _df.groupby("case_id"):
-            acts = grp.sort_values("timestamp")["activity"].tolist()
+            acts = grp["activity"].tolist()
             for a, b in zip(acts[:-1], acts[1:]):
                 real_transitions.add((a, b))
 
@@ -333,6 +377,11 @@ def extract_decision_rules(
     step_groups: dict = defaultdict(list)
     for traj in rl_trajectories:
         for step in traj["steps"]:
+            # Skip the environment's concluding draw — an extracted rule is a
+            # statement about what the agent decides, and it decides nothing
+            # here. See count_transitions() in routing_preference_table().
+            if step.get("env_concluded") or step.get("env_no_move"):
+                continue
             key = (step["from_activity"], step["to_activity"])
             step_groups[key].append(step)
 
@@ -383,7 +432,13 @@ def extract_decision_rules(
         cond_volume = _bin_volume(float(np.median(volumes)))
         cond_tprox  = _bin_term_prox(float(np.median(t_proxes)))
 
-        # Build human-readable rule
+        # Build human-readable rule.
+        #
+        # These tags are dead when the environment owns the verdict: terminals
+        # are withheld from the routing mask, so no extracted rule ends at one
+        # (verified — 0 of 14, 25 and 11 rules across the three datasets). They
+        # are kept only so the `verdict_mode="agent"` ablation still annotates
+        # correctly.
         is_bad = to in env._bad_terminals
         is_good = to in env._good_terminals
         outcome_tag = " [BAD TERMINAL]" if is_bad else (" [GOOD TERMINAL]" if is_good else "")

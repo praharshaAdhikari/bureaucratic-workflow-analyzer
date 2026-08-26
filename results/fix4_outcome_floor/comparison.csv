@@ -1,0 +1,4 @@
+dataset,graph_shortest_route,real_min,real_p1,real_p50,floor_applied,random_min_episode_len,random_mean_episode_len,random_terminated
+BPIC2012,4,3.0,3.0,9.0,3,3,19.0,1.0
+BPIC2015,2,7.0,11.0,48.0,11,11,48.6,0.9766666666666667
+BPIC2017,3,8.0,13.0,31.0,13,13,46.0,0.9866666666666667

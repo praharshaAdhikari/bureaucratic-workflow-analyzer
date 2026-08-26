@@ -1,0 +1,4 @@
+dataset,real_p_good,agent_good_random,agent_good_fixed,agent_swing,env_good_random,env_fixed_policy,env_good_fixed,env_swing,env_swing_ci_low,env_n_concluded_random,env_n_concluded_fixed,env_n_concluded_first,env_n_concluded_last,env_comparable,env_vs_real,env_mean_len,real_median_steps,floor,env_min_len
+BPIC2012,0.177,0.17,0.0,0.17,0.1775,first,0.1617,0.0158,0.0,400,334,334,90,True,0.0005,19.9,9.0,3,3
+BPIC2015,0.827,0.4806,,,0.8325,last,0.8684,0.0359,0.0,388,38,14,38,True,0.0054,50.2,48.0,11,11
+BPIC2017,0.5197,0.155,0.0,0.155,0.5455,first,0.5559,0.0105,0.0,396,286,286,400,True,0.0258,45.2,31.0,13,13

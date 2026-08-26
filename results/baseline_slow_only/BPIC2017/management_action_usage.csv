@@ -1,0 +1,14 @@
+mgmt_action,rl_rate,random_rate,ratio
+assign_to_primary_team,0.9028,0.2743,3.29
+enable_cross_trained_pool,0.0487,0.071,0.69
+skip_optional_subprocess,0.0451,0.2202,0.2
+adjust_staffing_by_case_volume,0.002,0.0024,0.83
+prioritize_urgent_case,0.0013,0.0232,0.06
+escalate_to_higher_authority,0.0,0.0276,0.0
+add_temporary_staff,0.0,0.0003,0.0
+outsource_to_volunteer_pool,0.0,0.0005,0.0
+merge_tasks_under_role,0.0,0.0013,0.0
+rebalance_overloaded_queue,0.0,0.069,0.0
+relax_rules_for_low_risk,0.0,0.2215,0.0
+reroute_from_overloaded_employee,0.0,0.0693,0.0
+trigger_high_cost_escalation,0.0,0.0196,0.0

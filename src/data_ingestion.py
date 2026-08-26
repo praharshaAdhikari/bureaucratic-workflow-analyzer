@@ -187,11 +187,11 @@ def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
         or pd.api.types.is_string_dtype(ts_col)
     )
     if needs_parse:
-        df["timestamp"] = pd.to_datetime(
-            ts_col.astype(str), utc=True, errors="coerce"
-        )
+        from timeutils import to_utc_series
+        df["timestamp"] = to_utc_series(ts_col)
 
-    df = df.sort_values(["case_id", "timestamp"]).reset_index(drop=True)
+    from timeutils import sort_events
+    df = sort_events(df).reset_index(drop=True)
     return df
 
 

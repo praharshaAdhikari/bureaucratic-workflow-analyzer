@@ -5,7 +5,9 @@ Verifies Fix 2: increased per-step cost and length bonus incentivise
 episodes closer to the empirical median trace length.
 
 Tests:
-  1. w_step is 0.1 (raised from 0.05)
+  1. w_step scales with the median trace length, so the total step cost over a
+     median-length episode is the same share of the outcome on every dataset
+     (and w_step_abs still pins it, for reproducing the old fixed constant)
   2. w_length_bonus attribute exists and equals 5.0
   3. Length bonus peaks at w_length_bonus when trace length == median
   4. Length bonus is 0 when trace length >= 2× median (no negative bleed)
@@ -22,8 +24,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
 from unittest.mock import MagicMock
 
+from src.reward_config import RewardConfig
 
-def _make_mock_env(median_len: int = 11):
+
+def _make_mock_env(median_len: int = 11, reward_config=None):
     from rl_env import ProcessEnv
 
     twin = MagicMock()
@@ -60,19 +64,42 @@ def _make_mock_env(median_len: int = 11):
         n_resources=5,
         embed_dim=32,
         bad_terminals={"A_DECLINED", "A_CANCELLED"},
+        reward_config=reward_config,
+        # Length-bonus behaviour on an agent-chosen terminal; see the
+        # note in test_fix1_bad_terminal_reward.py.
+        verdict_mode="agent",
     )
     return env
 
 
 class TestEpisodeLengthFix:
 
-    def test_w_step_is_tunable(self):
-        """w_step should be 0.05 by default (tunable via reward_tuning)."""
-        env = _make_mock_env()
-        assert env.w_step == 0.05, (
-            f"Expected w_step=0.05 (default), got {env.w_step}. "
-            "Fix 2 relies on w_length_bonus, not hardcoded w_step."
-        )
+    def test_w_step_scales_with_trace_length(self):
+        """
+        w_step comes from RewardConfig.step_share divided by the median trace
+        length, so the total step cost over a median-length episode is the
+        same fraction of the outcome on every dataset.
+
+        It used to be a fixed 0.05 regardless of process length, which made
+        shaping worth 16% of the reward on a 45-step process and 3% on an
+        11-step one — the same config training for different goals.
+        """
+        cfg = RewardConfig()
+        for median in (11, 35, 45):
+            env = _make_mock_env(median_len=median)
+            expected = cfg.step_share * cfg.w_terminal / median
+            assert abs(env.w_step - expected) < 1e-9, (
+                f"median={median}: expected w_step={expected:.6f}, got {env.w_step:.6f}"
+            )
+            # The invariant that matters: total cost over a median episode is
+            # a constant share of the outcome, whatever the process length.
+            total_over_median = env.w_step * median
+            assert abs(total_over_median - cfg.step_share * cfg.w_terminal) < 1e-9
+
+    def test_absolute_weight_override(self):
+        """Pinning w_step_abs bypasses the share, for reproducing the old setup."""
+        env = _make_mock_env(median_len=45, reward_config=RewardConfig(w_step_abs=0.05))
+        assert abs(env.w_step - 0.05) < 1e-12
 
     def test_w_length_bonus_exists(self):
         """w_length_bonus attribute must exist and equal 5.0."""
@@ -148,9 +175,9 @@ class TestEpisodeLengthFix:
         cost_short = env.w_step * 5
         cost_long  = env.w_step * 15
         assert cost_short < cost_long, "Step cost not accumulating correctly."
-        # With w_step=0.05: 5 steps = 0.25, 15 steps = 0.75
-        assert abs(cost_short - 0.25) < 1e-9, f"Expected 0.25, got {cost_short}"
-        assert abs(cost_long  - 0.75) < 1e-9, f"Expected 0.75, got {cost_long}"
+        assert abs(cost_long - 3 * cost_short) < 1e-9, (
+            "Step cost should be linear in the number of steps."
+        )
 
     def test_median_length_episode_beats_double_length_episode(self):
         """

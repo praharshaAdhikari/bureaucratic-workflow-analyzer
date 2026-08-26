@@ -1,0 +1,4 @@
+dataset,old_n_good,old_traces_ending_at_a_good_terminal,old_earliest_good_terminal_pos_p25,new_n_good,new_n_bad,new_n_excluded,manual_labels,new_earliest_terminal_pos_p25,real_cases_reaching_an_outcome,real_good_rate_of_those,real_median_steps_to_outcome,median_trace_length
+BPIC2012,5,0.0,0.083,4,3,0,0,0.857,0.9695,0.177,9.0,11.0
+BPIC2015,5,0.5806,0.824,2,3,19,24,0.829,0.4309,0.827,48.0,45.0
+BPIC2017,3,0.0,0.161,2,4,0,0,0.889,0.9971,0.5197,31.0,35.0

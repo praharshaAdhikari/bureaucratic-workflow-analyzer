@@ -1,0 +1,7 @@
+dataset,outcome,n_seeds,mean_rho,min_rho,max_rho,mean_partial_rho,mean_speedup,verdict
+BPIC2012,bad,5,0.3,-0.19,0.484,-0.065,40.263,no association
+BPIC2012,good,5,-0.072,-0.151,0.11,-0.025,0.924,no association
+BPIC2015,bad,5,0.008,-0.111,0.114,0.015,0.995,no association
+BPIC2015,good,5,0.025,-0.031,0.085,-0.039,1.01,no association
+BPIC2017,bad,5,-0.222,-0.348,-0.059,-0.285,0.572,supported on average
+BPIC2017,good,5,0.086,-0.011,0.114,-0.103,1.095,no association

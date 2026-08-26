@@ -43,6 +43,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
+from timeutils import ensure_utc_timestamps, sort_events
+
 
 # ---------------------------------------------------------------------------
 # Parallel simulation worker (module-level so it's picklable)
@@ -157,11 +159,11 @@ class DigitalTwin:
     # ------------------------------------------------------------------
 
     def fit(self, df: pd.DataFrame) -> "DigitalTwin":
-        df = df.copy()
         # Coerce timestamp to UTC-aware datetime regardless of dtype
-        # (handles ArrowDtype large_string / timestamp from PyArrow-backed parquet)
-        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(str), utc=True, errors="coerce")
-        df = df.sort_values(["case_id", "timestamp"])
+        # (handles ArrowDtype large_string / timestamp from PyArrow-backed parquet).
+        # Must not go via astype(str) — see timeutils for why.
+        df = ensure_utc_timestamps(df)
+        df = sort_events(df)
         self.activities = sorted(df["activity"].dropna().unique().tolist())
         self._fit_transitions(df)
         self._fit_trace_length_cdf(df)
@@ -288,9 +290,7 @@ class DigitalTwin:
         """
         MIN_SAMPLES = 5  # minimum observations to use empirical sampling
 
-        df = df.copy()
-        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(str), utc=True, errors="coerce")
-        df = df.sort_values(["case_id", "timestamp"])
+        df = sort_events(ensure_utc_timestamps(df))
         df["next_ts"] = df.groupby("case_id")["timestamp"].shift(-1)
         df["dur_s"]   = (df["next_ts"] - df["timestamp"]).dt.total_seconds()
         df_gaps = df[df["dur_s"].notna()].copy()
@@ -306,39 +306,46 @@ class DigitalTwin:
         if len(global_gaps) < MIN_SAMPLES:
             global_gaps = np.array([300.0])  # 5 minutes
 
-        # Per-activity empirical duration arrays (gaps > 60s = non-trivial)
-        # These are what the KS metric measures
+        # Per-activity empirical duration arrays.
+        #
+        # These hold EVERY observed gap, including zeros and sub-minute ones.
+        # They used to hold only gaps > 60s, with the comment "matches what the
+        # KS metric sees" — and that is exactly the problem: the duration
+        # metric filters both the real and simulated sides to > 60s, so it is
+        # structurally blind to whatever the fit discards. The two agreed with
+        # each other while disagreeing with the log.
+        #
+        # The effect was large. A_SUBMITTED in BPIC2012 is followed within a
+        # second by A_PARTLYSUBMITTED in essentially every case, so its real
+        # median gap is 0s. Dropping everything under a minute left only the
+        # rare long tail, and the sampler returned a median of 1,035s and a
+        # mean of 84,118s for it. Summed over a trace, simulated cycle times
+        # came out 3-11x longer than the real ones.
         self._duration_empirical: dict[str, np.ndarray] = {}
 
         # Keep parametric params for backward compat (used by duration_params)
         fallback_mu = float(np.log(5 * 60))
 
         for act in self.activities:
-            if act in self._zero_gap_activities:
-                self.duration_params[act]   = (np.log(10), 0.3)
-                self.processing_params[act] = (np.log(10), 0.3)
-                self.waiting_params[act]    = None  # type: ignore[assignment]
-                self._duration_empirical[act] = np.array([10.0])
-                continue
-
             grp = df_gaps[df_gaps["activity"] == act]
-            # Use all gaps > 0 for sampling (matches what KS metric sees: gaps > 60s)
-            # but store all > 0 so zero-gap activities are already handled above
-            nontrivial = grp[grp["dur_s"] > 60]["dur_s"].values
+            observed = grp["dur_s"].clip(lower=0.0).values
 
-            if len(nontrivial) >= MIN_SAMPLES:
+            if len(observed) >= MIN_SAMPLES:
                 # Empirical: store sorted array for fast quantile sampling
-                self._duration_empirical[act] = np.sort(nontrivial)
-            elif len(nontrivial) > 0:
-                # Too few samples: use log-normal fitted from what we have
-                log_vals = np.log(np.clip(nontrivial, 1, None))
+                self._duration_empirical[act] = np.sort(observed)
+            elif len(observed) > 0:
+                # Too few samples: widen with a log-normal fitted from what we
+                # have, keeping the observations themselves.
+                log_vals = np.log(np.clip(observed, 1, None))
                 mu    = float(np.median(log_vals))
                 sigma = float(max(np.std(log_vals), 0.3))
-                # Synthesize a small empirical array from the fitted distribution
                 synth = np.exp(np.random.default_rng(42).normal(mu, sigma, 50))
-                self._duration_empirical[act] = np.sort(synth)
+                self._duration_empirical[act] = np.sort(
+                    np.concatenate([observed, synth])
+                )
             else:
-                # No non-trivial gaps: fall back to global distribution
+                # Activity never observed with a following event: fall back to
+                # the global gap distribution.
                 self._duration_empirical[act] = np.sort(global_gaps)
 
             # Parametric params (kept for backward compat / diagnostics)
@@ -448,11 +455,11 @@ class DigitalTwin:
         handling any shape — multi-modal, heavy-tailed, zero-inflated — without
         parametric assumptions.
 
-        Zero-gap activities get a small fixed duration (~10s).
+        Zero gaps are part of the empirical arrays now, so activities that
+        complete instantly sample 0 naturally. ``_zero_gap_activities`` is kept
+        as a diagnostic set but no longer short-circuits sampling — doing so
+        replaced a true 0s gap with a synthetic ~10s one.
         """
-        if activity in self._zero_gap_activities:
-            return float(np.exp(self.rng.normal(np.log(10), 0.3)))
-
         empirical = self._duration_empirical.get(activity)
         if empirical is not None and len(empirical) > 0:
             return float(self.rng.choice(empirical))

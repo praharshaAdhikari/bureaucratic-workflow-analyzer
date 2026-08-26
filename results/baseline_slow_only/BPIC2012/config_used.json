@@ -1,0 +1,76 @@
+{
+  "dataset": "BPIC2012",
+  "n_activities": 24,
+  "median_trace_length": 11.0,
+  "embed_dim": 32,
+  "max_steps": 150,
+  "n_resources": 20,
+  "env_seed": 42,
+  "min_steps_to_outcome": 3,
+  "steps_to_outcome_real": {
+    "p0": 3.0,
+    "p1": 3.0,
+    "p5": 3.0,
+    "p10": 3.0,
+    "p25": 3.0,
+    "p50": 9.0,
+    "p75": 29.0,
+    "min": 3.0,
+    "n_cases_with_outcome": 12688,
+    "coverage": 0.969511729196913
+  },
+  "verdict_mode": "environment",
+  "outcome_base_rate_p_good": 0.17701765447667087,
+  "real_cycle_days_median": 0.8085351157407407,
+  "good_terminals": [
+    "A_ACTIVATED",
+    "A_APPROVED",
+    "A_REGISTERED",
+    "O_ACCEPTED"
+  ],
+  "bad_terminals": [
+    "A_CANCELLED",
+    "A_DECLINED",
+    "O_DECLINED"
+  ],
+  "reward_config": {
+    "w_terminal": 30.0,
+    "w_bad_terminal": -30.0,
+    "w_length_bonus": 5.0,
+    "progress_share": 0.0,
+    "step_share": 0.02,
+    "w_loop": 1.0,
+    "time_share": 0.25,
+    "intervention_cost_share": 1.0,
+    "effect_scale": 1.0,
+    "w_progress_abs": null,
+    "w_step_abs": null
+  },
+  "resolved_per_step_weights": {
+    "w_progress": 0.0,
+    "w_step": 0.05454545454545454
+  },
+  "training_seed": 0,
+  "algorithm": "MaskablePPO",
+  "policy": "MultiInputPolicy",
+  "total_timesteps_cap": 500000,
+  "timesteps_run": 210000,
+  "log_interval": 10000,
+  "early_stopping": {
+    "window": 5,
+    "min_delta": 0.3,
+    "patience": 8
+  },
+  "ppo_hyperparameters": {
+    "learning_rate": 0.0003,
+    "n_steps": 2048,
+    "batch_size": 64,
+    "n_epochs": 10,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_range": "sb3 default (0.2)",
+    "ent_coef": 0.0,
+    "vf_coef": 0.5,
+    "max_grad_norm": 0.5
+  }
+}

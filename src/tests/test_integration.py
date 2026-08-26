@@ -62,11 +62,6 @@ def test_round_trip_fidelity():
     with tempfile.TemporaryDirectory() as tmpdir:
         twin, _ = make_twin()
         gen = SyntheticStreamGenerator(twin=twin, arrival_rate_s=3600.0)
-        gen.start(n_cases=30)
-
-        # Capture original events before replay
-        original_events = list(gen._events)
-        original_df = pd.DataFrame(original_events)[["case_id", "activity", "timestamp"]]
 
         # Pipeline with small max_buffer_rows to force a Parquet flush
         pipeline = StreamIngestionPipeline(
@@ -77,9 +72,21 @@ def test_round_trip_fidelity():
             dataset_name="roundtrip_test",
         )
 
-        # Reset generator and replay
-        gen.reset(seed=42)
+        # Generate once, deterministically, and compare against exactly those
+        # events.
+        #
+        # This test used to capture original_events from an initial start()
+        # and then call reset(seed=42) before replaying. Those are two
+        # different simulations: __init__ leaves _seed as None, so the first
+        # start() takes the unseeded parallel path while reset(seed=42) takes
+        # the seeded single-threaded one. The timestamps therefore differed by
+        # hours and the test could never have passed on them; case_id and
+        # activity matched only because make_twin() is a deterministic
+        # A -> B -> C chain. A dtype mismatch was raised first and hid it.
         gen.start(n_cases=30)
+        gen.reset(seed=42)
+        original_df = pd.DataFrame(list(gen._events))[["case_id", "activity", "timestamp"]]
+
         gen.replay_into(pipeline, batch_size=20)
 
         # Collect all events: in-memory buffer + flushed Parquet files
@@ -111,10 +118,15 @@ def test_round_trip_fidelity():
         assert len(all_sorted) == len(orig_sorted), (
             f"Row count mismatch: got {len(all_sorted)}, expected {len(orig_sorted)}"
         )
+        # check_dtype=False: the test is about values surviving the round trip,
+        # and a Parquet round trip legitimately changes the storage dtype for
+        # text columns under pandas 3 (str on the way in, object on the way
+        # back). Values are still compared exactly.
         pd.testing.assert_frame_equal(
             all_sorted.reset_index(drop=True),
             orig_sorted.reset_index(drop=True),
             check_like=False,
+            check_dtype=False,
         )
 
 
